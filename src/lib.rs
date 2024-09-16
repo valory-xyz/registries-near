@@ -1,9 +1,10 @@
 use near_contract_standards::non_fungible_token::metadata::{
     NFTContractMetadata, TokenMetadata, NonFungibleTokenMetadataProvider, NFT_METADATA_SPEC,
 };
+use near_contract_standards::non_fungible_token::enumeration::NonFungibleTokenEnumeration;
 use near_contract_standards::non_fungible_token::{NonFungibleToken, Token};
 use near_sdk::borsh::{self, BorshDeserialize, BorshSerialize};
-// use near_sdk::json_types::{Base64VecU8, U128};
+use near_sdk::json_types::{Base64VecU8, U128};
 use near_sdk::collections::LazyOption;
 use near_sdk::{
     env, near_bindgen, require, AccountId, BorshStorageKey, PanicOnDefault, Promise, PromiseOrValue, StorageUsage,
@@ -73,6 +74,26 @@ impl ServiceRegistry {
         }
     }
 
+    #[payable]
+    pub fn create(&mut self, service_owner: AccountId) {
+        let tm = TokenMetadata {
+            title: Some(String::default()), // ex. "Arch Nemesis: Mail Carrier" or "Parcel #5055"
+            description: Some(String::default()), // free-form description
+            media: Some(String::default()), // URL to associated media, preferably to decentralized, content-addressed storage
+            media_hash: Some(Base64VecU8(vec![])), // Base64-encoded sha256 hash of content referenced by the `media` field. Required if `media` is included.
+            copies: Some(1u64), // number of copies of this set of metadata in existence when token was minted.
+            issued_at: Some(String::default()), // ISO 8601 datetime when token was issued or minted
+            expires_at: Some(String::default()), // ISO 8601 datetime when token expires
+            starts_at: Some(String::default()), // ISO 8601 datetime when token starts being valid
+            updated_at: Some(String::default()), // ISO 8601 datetime when token was last updated
+            extra: Some(String::default()), // anything extra the NFT wants to store on-chain. Can be stringified JSON.
+            reference: Some(String::default()), // URL to an off-chain JSON file with more info.
+            reference_hash: Some(Base64VecU8(vec![])),
+        };
+        let token_id = "0".to_string();
+        self.tokens.internal_mint(token_id.clone(), service_owner, Some(tm));
+    }
+
 //     pub fn set_metadata(
 //         &mut self,
 //         name: Option<String>,
@@ -122,6 +143,10 @@ impl ServiceRegistry {
     pub fn set_paused(&mut self, paused: bool) {
         require!(self.owner_or_self());
         self.paused = if paused { true } else { false };
+    }
+
+    pub fn total_supply(&self) -> U128 {
+        self.tokens.nft_total_supply()
     }
 
     pub fn version(&self) -> String {

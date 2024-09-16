@@ -14,9 +14,9 @@ test.beforeEach(async t => {
   const root = worker.rootAccount;
   const contract = await root.devDeploy(
     "target/wasm32-unknown-unknown/release/registries_near.wasm",
-    {initialBalance: NEAR.parse('3 N').toJSON()},
+    {initialBalance: NEAR.parse("3 N").toJSON()},
   );
-  const deployer = await root.createSubAccount("deployer", {initialBalance: NEAR.parse('3 N').toJSON()});
+  const deployer = await root.createSubAccount("deployer", {initialBalance: NEAR.parse("3 N").toJSON()});
 
   // Save state for test runs, it is unique for each test
   t.context.worker = worker;
@@ -31,12 +31,15 @@ test.afterEach.always(async t => {
 
 test("Check contract state", async t => {
   const {root, contract, deployer} = t.context.accounts;
-  const attachedDeposit = '2 N';
 //  console.log("root:", root);
 //  console.log("contract:", contract);
   await root.call(contract, "new_default_meta", {owner_id: deployer});
 //  await contract.view("is_paused");
-  const result = await contract.view("is_paused", {});
-  console.log(result);
+  let result = await contract.view("is_paused", {});
   t.is(result, false);
+
+  const attachedDeposit = "1 N";
+  await root.call(contract, "create", {service_owner: deployer}, {attachedDeposit});
+  result = await contract.view("total_supply", {});
+  console.log(result);
 });
