@@ -1,5 +1,6 @@
-# Object file
-*.o
-
-# Ada Library Information
-*.ali
+.idea
+.anchor
+.near-credentials
+node_modules
+near-sandbox
+target

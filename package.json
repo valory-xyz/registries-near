@@ -1,0 +1,11 @@
+{
+  "name": "registries-near",
+  "scripts": {
+    "prebuild": "rustup target add wasm32-unknown-unknown",
+    "build": "cargo build --target wasm32-unknown-unknown --release"
+  },
+  "devDependencies": {
+    "bn.js": "^5.2.1",
+    "near-api-js": "^5.0.0"
+  }
+}
