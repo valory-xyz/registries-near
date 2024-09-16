@@ -116,7 +116,7 @@ impl ServiceRegistry {
     }
 
     pub fn is_paused(&self) -> bool {
-        self.paused && !self.owner_or_self()
+        self.paused //&& !self.owner_or_self()
     }
 
     pub fn set_paused(&mut self, paused: bool) {
