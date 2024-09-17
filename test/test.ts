@@ -1,6 +1,21 @@
 import {Worker, NEAR, NearAccount} from "near-workspaces";
 import anyTest, {TestFn} from "ava";
 
+const defaultMetadata = {
+    title: "Service Name",
+    description: "Service Destription",
+    media: "",
+    media_hash: "",
+    copies: 1,
+    issued_at: "",
+    expires_at: "",
+    starts_at: "",
+    updated_at: "",
+    extra: "",
+    reference: "",
+    reference_hash: "",
+}
+
 const test = anyTest as TestFn<{
   worker: Worker;
   accounts: Record<string, NearAccount>;
@@ -39,7 +54,10 @@ test("Check contract state", async t => {
   t.is(result, false);
 
   const attachedDeposit = "1 N";
-  await root.call(contract, "create", {service_owner: deployer}, {attachedDeposit});
+  await root.call(contract, "create", {service_owner: deployer, metadata: defaultMetadata}, {attachedDeposit});
   result = await contract.view("total_supply", {});
+  console.log(result);
+
+  result = await contract.view("get_token_metadata", {token_id: "1"});
   console.log(result);
 });
