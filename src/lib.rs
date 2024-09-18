@@ -20,7 +20,7 @@ use near_sdk::collections::{LookupMap, TreeMap, UnorderedSet};
 // const TGAS: u64 = 1_000_000_000_000;
 
 #[near_bindgen]
-#[derive(Debug, Clone, Default, PartialEq, Eq)]
+#[derive(BorshDeserialize, BorshSerialize, PanicOnDefault)]
 pub struct AgentParams {
     pub agent_id: u32,
     pub num_agent_instances: u32,
@@ -28,7 +28,7 @@ pub struct AgentParams {
 }
 
 #[near_bindgen]
-#[derive(Debug, Clone, Default, PartialEq, Eq)]
+#[derive(BorshDeserialize, BorshSerialize, PanicOnDefault)]
 pub struct Service {
     // Service token
     pub token: Option<AccountId>,
@@ -37,7 +37,7 @@ pub struct Service {
     // Service multisig address
     pub multisig: Option<AccountId>,
     // IPFS hashes pointing to the config metadata
-    pub config_hash: [u8; 32],
+    pub config_hash: Option<[u8; 32]>,
     // Agent instance signers threshold: must no less than ceil((n * 2 + 1) / 3) of all the agent instances combined
     // This number will be enough to have ((2^32 - 1) * 3 - 1) / 2, which is bigger than 6.44b
     pub threshold: u32,
@@ -49,13 +49,13 @@ pub struct Service {
     pub state: u8,
     // Set of canonical agent Ids for the service, each agent corresponding number of agent instances,
     // and a bond corresponding to each agent Id
-    pub agent_params: Vec<AgentParams>,
+    pub agent_params: Option<Vec<AgentParams>>,
 }
 
 #[near_bindgen]
 #[derive(BorshDeserialize, BorshSerialize, PanicOnDefault)]
 pub struct ServiceRegistry {
-    services: Option<LookupMap<TokenId, Service>>,
+    services: LookupMap<TokenId, Service>,
     tokens: NonFungibleToken,
     metadata: LazyOption<NFTContractMetadata>,
     paused: bool,
@@ -70,6 +70,7 @@ enum StorageKey {
     TokenMetadata,
     Enumeration,
     Approval,
+    Service
 }
 
 #[near_bindgen]
@@ -97,7 +98,7 @@ impl ServiceRegistry {
         assert!(!env::state_exists(), "Already initialized");
         metadata.assert_valid();
         Self {
-            services: Some(LookupMap::new()),
+            services: LookupMap::new(StorageKey::Service),
             tokens: NonFungibleToken::new(
                 StorageKey::NonFungibleToken,
                 owner_id,
@@ -129,7 +130,20 @@ impl ServiceRegistry {
         self.tokens.internal_mint_with_refund(token_id.clone(), service_owner, Some(metadata), None);
 
         // Allocate the service
-
+        self.services.insert(
+            &token_id,
+            &Service {
+                token: None,
+                security_deposit: 0,
+                multisig: None,
+                config_hash: None,
+                threshold: 0,
+                max_num_agent_instances: 0,
+                num_agent_instances: 0,
+                state: 0,
+                agent_params: None,
+            }
+        );
 
         let storage = env::storage_usage() - initial_storage_usage;
         refund_deposit_to_account(storage, env::predecessor_account_id());
