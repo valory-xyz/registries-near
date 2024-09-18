@@ -2,13 +2,14 @@ use near_contract_standards::non_fungible_token::metadata::{
     NFTContractMetadata, TokenMetadata, NonFungibleTokenMetadataProvider, NFT_METADATA_SPEC,
 };
 use near_contract_standards::non_fungible_token::enumeration::NonFungibleTokenEnumeration;
-use near_contract_standards::non_fungible_token::{NonFungibleToken, Token, TokenId};
+use near_contract_standards::non_fungible_token::{NonFungibleToken, Token, TokenId, refund_deposit_to_account};
 use near_sdk::borsh::{self, BorshDeserialize, BorshSerialize};
 use near_sdk::json_types::{Base64VecU8, U128};
 use near_sdk::collections::LazyOption;
 use near_sdk::{
     env, near_bindgen, require, AccountId, BorshStorageKey, PanicOnDefault, Promise, PromiseOrValue, StorageUsage,
 };
+use near_sdk::collections::{LookupMap, TreeMap, UnorderedSet};
 //use near_gas::NearGas;
 
 // pub mod external;
@@ -19,8 +20,42 @@ use near_sdk::{
 // const TGAS: u64 = 1_000_000_000_000;
 
 #[near_bindgen]
+#[derive(Debug, Clone, Default, PartialEq, Eq)]
+pub struct AgentParams {
+    pub agent_id: u32,
+    pub num_agent_instances: u32,
+    pub bond: u64
+}
+
+#[near_bindgen]
+#[derive(Debug, Clone, Default, PartialEq, Eq)]
+pub struct Service {
+    // Service token
+    pub token: Option<AccountId>,
+    // Service security deposit
+    pub security_deposit: u64,
+    // Service multisig address
+    pub multisig: Option<AccountId>,
+    // IPFS hashes pointing to the config metadata
+    pub config_hash: [u8; 32],
+    // Agent instance signers threshold: must no less than ceil((n * 2 + 1) / 3) of all the agent instances combined
+    // This number will be enough to have ((2^32 - 1) * 3 - 1) / 2, which is bigger than 6.44b
+    pub threshold: u32,
+    // Total number of agent instances. We assume that the number of instances is bounded by 2^32 - 1
+    pub max_num_agent_instances: u32,
+    // Actual number of agent instances. This number is less or equal to maxNumAgentInstances
+    pub num_agent_instances: u32,
+    // Service state
+    pub state: u8,
+    // Set of canonical agent Ids for the service, each agent corresponding number of agent instances,
+    // and a bond corresponding to each agent Id
+    pub agent_params: Vec<AgentParams>,
+}
+
+#[near_bindgen]
 #[derive(BorshDeserialize, BorshSerialize, PanicOnDefault)]
 pub struct ServiceRegistry {
+    services: Option<LookupMap<TokenId, Service>>,
     tokens: NonFungibleToken,
     metadata: LazyOption<NFTContractMetadata>,
     paused: bool,
@@ -62,6 +97,7 @@ impl ServiceRegistry {
         assert!(!env::state_exists(), "Already initialized");
         metadata.assert_valid();
         Self {
+            services: Some(LookupMap::new()),
             tokens: NonFungibleToken::new(
                 StorageKey::NonFungibleToken,
                 owner_id,
@@ -76,12 +112,27 @@ impl ServiceRegistry {
 
     #[payable]
     pub fn create(&mut self, service_owner: AccountId, metadata: TokenMetadata) {
+        // Record current storage usage
+        let initial_storage_usage = env::storage_usage();
+
+        // TODO Check other fields?
+        // Number of copies must be equal to one
+        require!(metadata.copies.unwrap() == 1);
+
         // Get the current total supply
         let supply = self.tokens.owner_by_id.len();
         // To be consistent with EVM where Ids start from 1, each new token Id is equal to supply + 1
         let token_id = (supply + 1).to_string();
+
         // Mint new service
-        self.tokens.internal_mint(token_id.clone(), service_owner, Some(metadata));
+        // This function is used such that the storage calculation is not engaged and deposit is not refunded
+        self.tokens.internal_mint_with_refund(token_id.clone(), service_owner, Some(metadata), None);
+
+        // Allocate the service
+
+
+        let storage = env::storage_usage() - initial_storage_usage;
+        refund_deposit_to_account(storage, env::predecessor_account_id());
     }
 
 //     pub fn set_metadata(
