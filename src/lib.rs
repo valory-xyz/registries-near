@@ -121,10 +121,14 @@ impl ServiceRegistry {
         }
     }
 
-    fn refund_deposit_to_account(storage_used: u64, deposit_used: u64, account_id: AccountId) {
-        //let required_cost = (env::storage_byte_cost().saturating_mul(storage_used.into())).saturating_add(deposit_used.into());
+    fn refund_deposit_to_account(storage_used: u64, deposit_used: u64, account_id: AccountId, deposit_in: bool) {
+        let mut refund: u128 = 0;
         let mut required_cost = env::storage_byte_cost().saturating_mul(storage_used.into());
-        required_cost = required_cost.saturating_add(deposit_used.into());
+        if deposit_in {
+            required_cost = required_cost.saturating_add(deposit_used.into());
+        } else {
+            refund = refund.saturating_add(deposit_used.into());;
+        }
         let attached_deposit = env::attached_deposit();
 
         require!(required_cost <= attached_deposit);
@@ -134,7 +138,7 @@ impl ServiceRegistry {
 //             format!("Must attach {} to cover storage", required_cost.exact_amount_display())
 //         );
 
-        let refund = attached_deposit.saturating_sub(required_cost);
+        refund += attached_deposit.saturating_sub(required_cost);
         // TODO: figure this out with near_token::NearToken
         //if refund.as_yoctonear() > 1 {
         if refund > 1 {
@@ -298,7 +302,7 @@ impl ServiceRegistry {
 
         // Increased storage
         let storage = env::storage_usage() - initial_storage_usage;
-        ServiceRegistry::refund_deposit_to_account(storage, 0, env::predecessor_account_id());
+        ServiceRegistry::refund_deposit_to_account(storage, 0, env::predecessor_account_id(), true);
 
         // TODO: event
 
@@ -343,7 +347,7 @@ impl ServiceRegistry {
 
         // Increased storage
         let storage = env::storage_usage() - initial_storage_usage;
-        ServiceRegistry::refund_deposit_to_account(storage, 0, env::predecessor_account_id());
+        ServiceRegistry::refund_deposit_to_account(storage, 0, env::predecessor_account_id(), true);
 
         // TODO: event
     }
@@ -366,8 +370,42 @@ impl ServiceRegistry {
         service.state = ServiceState::ActiveRegistration;
 
         // Increased storage
+        // TODO: check if this is zero, as no storage is supposedly increased
         let storage = env::storage_usage() - initial_storage_usage;
-        ServiceRegistry::refund_deposit_to_account(storage, service.security_deposit, env::predecessor_account_id());
+        ServiceRegistry::refund_deposit_to_account(storage, service.security_deposit, env::predecessor_account_id(), true);
+
+        // TODO: event
+    }
+
+    pub fn terminate(
+        &mut self,
+        service_id: TokenId
+    ) {
+        // TODO: Check for service owner
+
+        // Record current storage usage
+        let initial_storage_usage = env::storage_usage();
+
+        // Get the service
+        let mut service = self.services.get(&service_id).unwrap();
+
+        // Check if the service is already terminated
+        require!(service.state != ServiceState::PreRegistration && service.state != ServiceState::TerminatedBonded);
+
+        // Define the state of the service depending on the number of bonded agent instances
+        if service.num_agent_instances > 0 {
+            service.state = ServiceState::TerminatedBonded;
+        } else {
+            service.state = ServiceState::PreRegistration;
+        }
+
+        // TODO: remove agent instances data?
+
+        // Increased storage
+        // TODO: check if this is zero, as no storage is supposedly increased
+        let storage = env::storage_usage() - initial_storage_usage;
+        // Send the deposit back to the service owner
+        ServiceRegistry::refund_deposit_to_account(storage, service.security_deposit, env::predecessor_account_id(), false);
 
         // TODO: event
     }
