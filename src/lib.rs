@@ -325,7 +325,12 @@ impl ServiceRegistry {
         // Record current storage usage
         let initial_storage_usage = env::storage_usage();
 
-        // TODO: Check for service owner
+        // Check for service owner
+        let owner_id = self.tokens
+            .owner_by_id
+            .get(&service_id)
+            .unwrap_or_else(|| env::panic_str("Token not found"));
+        require!(env::predecessor_account_id() == owner_id, "Predecessor must be token owner.");
 
         self.check_service_params(
             metadata.clone(),
@@ -356,7 +361,12 @@ impl ServiceRegistry {
         &mut self,
         service_id: TokenId
     ) {
-        // TODO: Check for service owner
+        // Check for service owner
+        let owner_id = self.tokens
+            .owner_by_id
+            .get(&service_id)
+            .unwrap_or_else(|| env::panic_str("Token not found"));
+        require!(env::predecessor_account_id() == owner_id, "Predecessor must be token owner.");
 
         // Record current storage usage
         let initial_storage_usage = env::storage_usage();
@@ -381,7 +391,12 @@ impl ServiceRegistry {
         &mut self,
         service_id: TokenId
     ) {
-        // TODO: Check for service owner
+        // Check for service owner
+        let owner_id = self.tokens
+            .owner_by_id
+            .get(&service_id)
+            .unwrap_or_else(|| env::panic_str("Token not found"));
+        require!(env::predecessor_account_id() == owner_id, "Predecessor must be token owner.");
 
         // Record current storage usage
         let initial_storage_usage = env::storage_usage();
