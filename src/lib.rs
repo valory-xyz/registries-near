@@ -19,10 +19,19 @@ use near_sdk::collections::{LookupMap, TreeMap, UnorderedSet};
 // const CURRENT_STATE_VERSION: u32 = 1;
 // const TGAS: u64 = 1_000_000_000_000;
 
+#[derive(BorshDeserialize, BorshSerialize)]
+pub enum ServiceState {
+    NonExistent,
+    PreRegistration,
+    ActiveRegistration,
+    FinishedRegistration,
+    Deployed,
+    TerminatedBonded
+}
+
 #[near_bindgen]
-#[derive(BorshDeserialize, BorshSerialize, PanicOnDefault)]
+#[derive(BorshDeserialize, BorshSerialize, PanicOnDefault, PartialEq)]
 pub struct AgentParams {
-    pub agent_id: u32,
     pub num_agent_instances: u32,
     pub bond: u64
 }
@@ -37,7 +46,7 @@ pub struct Service {
     // Service multisig address
     pub multisig: Option<AccountId>,
     // IPFS hashes pointing to the config metadata
-    pub config_hash: Option<[u8; 32]>,
+    pub config_hash: [u8; 32],
     // Agent instance signers threshold: must no less than ceil((n * 2 + 1) / 3) of all the agent instances combined
     // This number will be enough to have ((2^32 - 1) * 3 - 1) / 2, which is bigger than 6.44b
     pub threshold: u32,
@@ -46,10 +55,10 @@ pub struct Service {
     // Actual number of agent instances. This number is less or equal to maxNumAgentInstances
     pub num_agent_instances: u32,
     // Service state
-    pub state: u8,
+    pub state: ServiceState,
     // Set of canonical agent Ids for the service, each agent corresponding number of agent instances,
     // and a bond corresponding to each agent Id
-    pub agent_params: Option<Vec<AgentParams>>,
+    pub agent_params: LookupMap<TokenId, Option<AgentParams>>,
 }
 
 #[near_bindgen]
@@ -70,7 +79,8 @@ enum StorageKey {
     TokenMetadata,
     Enumeration,
     Approval,
-    Service
+    Service,
+    AgentParams
 }
 
 #[near_bindgen]
@@ -112,13 +122,60 @@ impl ServiceRegistry {
     }
 
     #[payable]
-    pub fn create(&mut self, service_owner: AccountId, metadata: TokenMetadata) {
+    pub fn create(
+        &mut self,
+        service_owner: AccountId,
+        metadata: TokenMetadata,
+        config_hash: [u8; 32],
+        agent_ids: Vec<u32>,
+        agent_num_instances: Vec<u32>,
+        agent_bonds: Vec<u64>,
+        threshold: u32
+    ) {
         // Record current storage usage
         let initial_storage_usage = env::storage_usage();
 
         // TODO Check other fields?
         // Number of copies must be equal to one
         require!(metadata.copies.unwrap() == 1);
+
+        // Check config_hash
+        require!(!config_hash.into_iter().all(|c| c == 0));
+
+        // Check array lengths
+        let arr_length = agent_ids.len();
+        require!(arr_length == agent_bonds.len());
+        require!(arr_length== agent_num_instances.len());
+
+        let mut security_deposit = 0;
+        let mut max_num_agent_instances = 0;
+        let mut agent_params: LookupMap<TokenId, Option<AgentParams>> = LookupMap::new(StorageKey::AgentParams);
+        for i in 0..arr_length {
+            require!(agent_ids[i] > 0);
+            require!(agent_num_instances[i] > 0);
+            require!(agent_bonds[i] > 0);
+
+            let res = agent_params.insert(
+                &agent_ids[i].to_string(),
+                &Some(AgentParams{num_agent_instances: agent_num_instances[i], bond: agent_bonds[i]})
+            );
+
+            // Check for the agent id uniqueness
+            require!(res == None);
+
+            // Adjust security deposit value
+            if security_deposit < agent_bonds[i] {
+                security_deposit = agent_bonds[i];
+            }
+
+            // Add to the maximum number of agent instances
+            max_num_agent_instances += agent_num_instances[i];
+        }
+    
+        // Check for the correct threshold: no less than ceil((n * 2 + 1) / 3) of all the agent instances combined
+        let mut check_threshold = max_num_agent_instances * 2 + 1;
+        check_threshold = check_threshold.div_ceil(3);
+        require!(threshold >= check_threshold && threshold <= max_num_agent_instances);
 
         // Get the current total supply
         let supply = self.tokens.owner_by_id.len();
@@ -134,14 +191,14 @@ impl ServiceRegistry {
             &token_id,
             &Service {
                 token: None,
-                security_deposit: 0,
+                security_deposit,
                 multisig: None,
-                config_hash: None,
-                threshold: 0,
-                max_num_agent_instances: 0,
+                config_hash,
+                threshold,
+                max_num_agent_instances,
                 num_agent_instances: 0,
-                state: 0,
-                agent_params: None,
+                state: ServiceState::PreRegistration,
+                agent_params,
             }
         );
 

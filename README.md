@@ -37,6 +37,11 @@ Current version:
 near account create-account fund-later `ACCOUNT_NAME` autogenerate-new-keypair save-to-legacy-keychain network-config testnet create
 ```
 
+### Testing
+```bash
+npx ava test/test.ts
+```
+
 ### Localnet
 The local validator in this case is the project `near-sandbox`
 https://github.com/near/near-sandbox
