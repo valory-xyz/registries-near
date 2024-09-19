@@ -2,7 +2,7 @@ use near_contract_standards::non_fungible_token::metadata::{
     NFTContractMetadata, TokenMetadata, NonFungibleTokenMetadataProvider, NFT_METADATA_SPEC,
 };
 use near_contract_standards::non_fungible_token::enumeration::NonFungibleTokenEnumeration;
-use near_contract_standards::non_fungible_token::{NonFungibleToken, Token, TokenId, refund_deposit_to_account};
+use near_contract_standards::non_fungible_token::{NonFungibleToken, Token, TokenId};
 use near_sdk::borsh::{self, BorshDeserialize, BorshSerialize};
 use near_sdk::json_types::{Base64VecU8, U128};
 use near_sdk::collections::LazyOption;
@@ -19,7 +19,7 @@ use near_sdk::collections::{LookupMap, TreeMap, UnorderedSet};
 // const CURRENT_STATE_VERSION: u32 = 1;
 // const TGAS: u64 = 1_000_000_000_000;
 
-#[derive(BorshDeserialize, BorshSerialize)]
+#[derive(BorshDeserialize, BorshSerialize, PartialEq)]
 pub enum ServiceState {
     NonExistent,
     PreRegistration,
@@ -46,7 +46,7 @@ pub struct Service {
     // Service multisig address
     pub multisig: Option<AccountId>,
     // IPFS hashes pointing to the config metadata
-    pub config_hash: [u8; 32],
+    pub config_hashes: Vec<[u8; 32]>,
     // Agent instance signers threshold: must no less than ceil((n * 2 + 1) / 3) of all the agent instances combined
     // This number will be enough to have ((2^32 - 1) * 3 - 1) / 2, which is bigger than 6.44b
     pub threshold: u32,
@@ -121,11 +121,197 @@ impl ServiceRegistry {
         }
     }
 
+    fn refund_deposit_to_account(storage_used: u64, deposit_used: u64, account_id: AccountId) {
+        //let required_cost = (env::storage_byte_cost().saturating_mul(storage_used.into())).saturating_add(deposit_used.into());
+        let mut required_cost = env::storage_byte_cost().saturating_mul(storage_used.into());
+        required_cost = required_cost.saturating_add(deposit_used.into());
+        let attached_deposit = env::attached_deposit();
+
+        require!(required_cost <= attached_deposit);
+        // TODO: figure this out with near_token::NearToken
+//         require!(
+//             required_cost <= attached_deposit,
+//             format!("Must attach {} to cover storage", required_cost.exact_amount_display())
+//         );
+
+        let refund = attached_deposit.saturating_sub(required_cost);
+        // TODO: figure this out with near_token::NearToken
+        //if refund.as_yoctonear() > 1 {
+        if refund > 1 {
+            Promise::new(account_id).transfer(refund);
+        }
+    }
+
+    fn check_service_params(
+        &self,
+        metadata: TokenMetadata,
+        config_hash: [u8; 32],
+        agent_ids: Vec<u32>,
+        agent_num_instances: Vec<u32>,
+        agent_bonds: Vec<u64>
+    ) {
+        // TODO Check other fields?
+        // Number of copies must be equal to one
+        require!(metadata.copies.unwrap() == 1);
+
+        // Check config hash
+        require!(!config_hash.into_iter().all(|h| h == 0));
+
+        // Check array lengths
+        require!(agent_ids.len() == agent_bonds.len());
+        require!(agent_ids.len() == agent_num_instances.len());
+
+        // Check non-zero agent Ids
+        require!(agent_ids.into_iter().all(|id| id > 0));
+    }
+
+    fn fill_service_params(
+        &mut self,
+        service_id: TokenId,
+        config_hash: [u8; 32],
+        agent_ids: Vec<u32>,
+        agent_num_instances: Vec<u32>,
+        agent_bonds: Vec<u64>,
+        threshold: u32
+    ) {
+        // Get the service
+        let mut service = self.services.get(&service_id).unwrap();
+
+        // Check the service state
+        require!(service.state == ServiceState::PreRegistration);
+
+        let mut security_deposit = 0;
+        let mut max_num_agent_instances = 0;
+
+        // Process agent ids and corresponding agent params
+        for i in 0..agent_ids.len() {
+            require!(agent_ids[i] > 0);
+
+            // Ignore zero agent params, as it could be the case for the service update
+            if agent_num_instances[i] > 0 && agent_bonds[i] > 0 {
+                let res = service.agent_params.insert(
+                    &agent_ids[i].to_string(),
+                    &Some(AgentParams{num_agent_instances: agent_num_instances[i], bond: agent_bonds[i]})
+                );
+
+                // Check for the agent id uniqueness
+                require!(res == None);
+
+                // Adjust security deposit value
+                if security_deposit < agent_bonds[i] {
+                    security_deposit = agent_bonds[i];
+                }
+
+                // Add to the maximum number of agent instances
+                max_num_agent_instances += agent_num_instances[i];
+            } else {
+                // Otherwise remove agent id and params
+                service.agent_params.remove(&agent_ids[i].to_string());
+            }
+        }
+
+        service.security_deposit = security_deposit;
+        service.max_num_agent_instances = max_num_agent_instances;
+
+        // Check for the correct threshold: no less than ceil((n * 2 + 1) / 3) of all the agent instances combined
+        let mut check_threshold = max_num_agent_instances * 2 + 1;
+        check_threshold = check_threshold.div_ceil(3);
+        require!(threshold >= check_threshold && threshold <= max_num_agent_instances);
+
+        service.threshold = threshold;
+
+        // Record the first config hash if the service is created, or update it, if necessary
+        // Check if the config hash is equal to the previous one
+        let mut equal = false;
+        // Get the last config hash
+        let last = service.config_hashes.last();
+        // If there is no config hash, the service is being created
+        if last != None {
+            // Compare last and current config hashes
+            equal = last.unwrap().iter().zip(config_hash.iter()).all(|(a,b)| a == b);
+        }
+
+        // If the config hash is different, push it to the list of configs
+        if !equal {
+            service.config_hashes.push(config_hash);
+        }
+    }
+
     #[payable]
     pub fn create(
         &mut self,
         service_owner: AccountId,
         metadata: TokenMetadata,
+        token: Option<AccountId>,
+        config_hash: [u8; 32],
+        agent_ids: Vec<u32>,
+        agent_num_instances: Vec<u32>,
+        agent_bonds: Vec<u64>,
+        threshold: u32
+    ) -> bool {
+        // Record current storage usage
+        let initial_storage_usage = env::storage_usage();
+
+        self.check_service_params(
+            metadata.clone(),
+            config_hash,
+            agent_ids.clone(),
+            agent_num_instances.clone(),
+            agent_bonds.clone()
+        );
+
+        // Get the current total supply
+        let supply = self.tokens.owner_by_id.len();
+        // To be consistent with EVM where Ids start from 1, each new token Id is equal to supply + 1
+        let service_id = (supply + 1).to_string();
+
+        // Mint new service
+        // This function is used such that the storage calculation is not engaged and deposit is not refunded
+        self.tokens.internal_mint_with_refund(service_id.clone(), service_owner, Some(metadata), None);
+
+        // Allocate the service
+        self.services.insert(
+            &service_id,
+            &Service {
+                // TODO: change with just token when other tokens are enabled
+                token: None,
+                security_deposit: 0,
+                multisig: None,
+                config_hashes: vec![],
+                threshold: 0,
+                max_num_agent_instances: 0,
+                num_agent_instances: 0,
+                state: ServiceState::PreRegistration,
+                agent_params: LookupMap::new(StorageKey::AgentParams),
+            }
+        );
+
+        // Fill in the service parameters
+        self.fill_service_params(
+            service_id,
+            config_hash,
+            agent_ids.clone(),
+            agent_num_instances.clone(),
+            agent_bonds.clone(),
+            threshold
+        );
+
+        // Increased storage
+        let storage = env::storage_usage() - initial_storage_usage;
+        ServiceRegistry::refund_deposit_to_account(storage, 0, env::predecessor_account_id());
+
+        // TODO: event
+
+        // TODO: If this return if needed, propagate to other functions
+        true
+    }
+
+    #[payable]
+    pub fn update(
+        &mut self,
+        service_id: TokenId,
+        metadata: TokenMetadata,
+        token: Option<AccountId>,
         config_hash: [u8; 32],
         agent_ids: Vec<u32>,
         agent_num_instances: Vec<u32>,
@@ -135,75 +321,55 @@ impl ServiceRegistry {
         // Record current storage usage
         let initial_storage_usage = env::storage_usage();
 
-        // TODO Check other fields?
-        // Number of copies must be equal to one
-        require!(metadata.copies.unwrap() == 1);
+        // TODO: Check for service owner
 
-        // Check config_hash
-        require!(!config_hash.into_iter().all(|c| c == 0));
-
-        // Check array lengths
-        let arr_length = agent_ids.len();
-        require!(arr_length == agent_bonds.len());
-        require!(arr_length== agent_num_instances.len());
-
-        let mut security_deposit = 0;
-        let mut max_num_agent_instances = 0;
-        let mut agent_params: LookupMap<TokenId, Option<AgentParams>> = LookupMap::new(StorageKey::AgentParams);
-        for i in 0..arr_length {
-            require!(agent_ids[i] > 0);
-            require!(agent_num_instances[i] > 0);
-            require!(agent_bonds[i] > 0);
-
-            let res = agent_params.insert(
-                &agent_ids[i].to_string(),
-                &Some(AgentParams{num_agent_instances: agent_num_instances[i], bond: agent_bonds[i]})
-            );
-
-            // Check for the agent id uniqueness
-            require!(res == None);
-
-            // Adjust security deposit value
-            if security_deposit < agent_bonds[i] {
-                security_deposit = agent_bonds[i];
-            }
-
-            // Add to the maximum number of agent instances
-            max_num_agent_instances += agent_num_instances[i];
-        }
-    
-        // Check for the correct threshold: no less than ceil((n * 2 + 1) / 3) of all the agent instances combined
-        let mut check_threshold = max_num_agent_instances * 2 + 1;
-        check_threshold = check_threshold.div_ceil(3);
-        require!(threshold >= check_threshold && threshold <= max_num_agent_instances);
-
-        // Get the current total supply
-        let supply = self.tokens.owner_by_id.len();
-        // To be consistent with EVM where Ids start from 1, each new token Id is equal to supply + 1
-        let token_id = (supply + 1).to_string();
-
-        // Mint new service
-        // This function is used such that the storage calculation is not engaged and deposit is not refunded
-        self.tokens.internal_mint_with_refund(token_id.clone(), service_owner, Some(metadata), None);
-
-        // Allocate the service
-        self.services.insert(
-            &token_id,
-            &Service {
-                token: None,
-                security_deposit,
-                multisig: None,
-                config_hash,
-                threshold,
-                max_num_agent_instances,
-                num_agent_instances: 0,
-                state: ServiceState::PreRegistration,
-                agent_params,
-            }
+        self.check_service_params(
+            metadata.clone(),
+            config_hash,
+            agent_ids.clone(),
+            agent_num_instances.clone(),
+            agent_bonds.clone()
         );
 
+        // Fill in the service parameters
+        self.fill_service_params(
+            service_id,
+            config_hash,
+            agent_ids.clone(),
+            agent_num_instances.clone(),
+            agent_bonds.clone(),
+            threshold
+        );
+
+        // Increased storage
         let storage = env::storage_usage() - initial_storage_usage;
-        refund_deposit_to_account(storage, env::predecessor_account_id());
+        ServiceRegistry::refund_deposit_to_account(storage, 0, env::predecessor_account_id());
+
+        // TODO: event
+    }
+
+    pub fn activate_registration(
+        &mut self,
+        service_id: TokenId
+    ) {
+        // TODO: Check for service owner
+
+        // Record current storage usage
+        let initial_storage_usage = env::storage_usage();
+
+        // Get the service
+        let mut service = self.services.get(&service_id).unwrap();
+
+        // Check the service state
+        require!(service.state == ServiceState::PreRegistration);
+
+        service.state = ServiceState::ActiveRegistration;
+
+        // Increased storage
+        let storage = env::storage_usage() - initial_storage_usage;
+        ServiceRegistry::refund_deposit_to_account(storage, service.security_deposit, env::predecessor_account_id());
+
+        // TODO: event
     }
 
 //     pub fn set_metadata(
