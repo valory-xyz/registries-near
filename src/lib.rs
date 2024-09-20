@@ -2,14 +2,16 @@ use near_contract_standards::non_fungible_token::metadata::{
     NFTContractMetadata, TokenMetadata, NonFungibleTokenMetadataProvider, NFT_METADATA_SPEC,
 };
 use near_contract_standards::non_fungible_token::enumeration::NonFungibleTokenEnumeration;
-use near_contract_standards::non_fungible_token::{NonFungibleToken, Token, TokenId};
+use near_contract_standards::non_fungible_token::{NonFungibleToken, Token};
 use near_sdk::borsh::{self, BorshDeserialize, BorshSerialize};
 use near_sdk::json_types::{Base64VecU8, U128};
 use near_sdk::collections::LazyOption;
 use near_sdk::{
     env, near_bindgen, require, AccountId, BorshStorageKey, PanicOnDefault, Promise, PromiseOrValue, StorageUsage,
 };
-use near_sdk::collections::{LookupMap, TreeMap, UnorderedSet};
+use near_sdk::collections::{LookupMap, Vector};
+//use near_account_id::{AccountId};
+//near_token::NearToken
 //use near_gas::NearGas;
 
 // pub mod external;
@@ -30,10 +32,18 @@ pub enum ServiceState {
 }
 
 #[near_bindgen]
-#[derive(BorshDeserialize, BorshSerialize, PanicOnDefault, PartialEq)]
+#[derive(BorshDeserialize, BorshSerialize, PanicOnDefault)]
 pub struct AgentParams {
     pub num_agent_instances: u32,
-    pub bond: u64
+    pub bond: u128,
+    pub instances: Vector<AccountId>
+}
+
+#[near_bindgen]
+#[derive(BorshDeserialize, BorshSerialize, PanicOnDefault)]
+pub struct OperatorData {
+    pub balance: u128,
+    pub instances: Vector<AccountId>
 }
 
 #[near_bindgen]
@@ -42,11 +52,11 @@ pub struct Service {
     // Service token
     pub token: Option<AccountId>,
     // Service security deposit
-    pub security_deposit: u64,
+    pub security_deposit: u128,
     // Service multisig address
     pub multisig: Option<AccountId>,
     // IPFS hashes pointing to the config metadata
-    pub config_hashes: Vec<[u8; 32]>,
+    pub config_hashes: Vector<[u8; 32]>,
     // Agent instance signers threshold: must no less than ceil((n * 2 + 1) / 3) of all the agent instances combined
     // This number will be enough to have ((2^32 - 1) * 3 - 1) / 2, which is bigger than 6.44b
     pub threshold: u32,
@@ -56,17 +66,26 @@ pub struct Service {
     pub num_agent_instances: u32,
     // Service state
     pub state: ServiceState,
-    // Set of canonical agent Ids for the service, each agent corresponding number of agent instances,
+    // Iterable set of canonical agent Ids for the service
+    pub agent_ids: Vector<u32>,
+    // Map of canonical agent Ids for the service, each agent corresponding number of agent instances,
     // and a bond corresponding to each agent Id
-    pub agent_params: LookupMap<TokenId, Option<AgentParams>>,
+    // TODO: consider changing to UnorderedMap with the iterator instead of separate agent_ids
+    pub agent_params: LookupMap<u32, AgentParams>,
+    // Map of agent instances in the service and their corresponding agent ids
+    pub agent_instances: LookupMap<AccountId, u32>,
+    // Map of operators in the service and their corresponding OperatorData struct
+    pub operators: LookupMap<AccountId, OperatorData>
 }
 
 #[near_bindgen]
 #[derive(BorshDeserialize, BorshSerialize, PanicOnDefault)]
 pub struct ServiceRegistry {
-    services: LookupMap<TokenId, Service>,
+    services: LookupMap<u32, Service>,
     tokens: NonFungibleToken,
     metadata: LazyOption<NFTContractMetadata>,
+    agent_instance_operators: LookupMap<AccountId, AccountId>,
+    slashed_funds: u128,
     paused: bool,
 }
 
@@ -80,7 +99,13 @@ enum StorageKey {
     Enumeration,
     Approval,
     Service,
-    AgentParams
+    AgentId,
+    AgentParam,
+    AgentInstance,
+    AgentInstancePerAgentId,
+    ConfigHash,
+    OperatorData,
+    AgentInstanceOperator
 }
 
 #[near_bindgen]
@@ -117,30 +142,25 @@ impl ServiceRegistry {
                 Some(StorageKey::Approval),
             ),
             metadata: LazyOption::new(StorageKey::Metadata, Some(&metadata)),
+            agent_instance_operators: LookupMap::new(StorageKey::AgentInstanceOperator),
+            slashed_funds: 0 as u128,
             paused: false,
         }
     }
 
-    fn refund_deposit_to_account(storage_used: u64, deposit_used: u64, account_id: AccountId, deposit_in: bool) {
+    fn refund_deposit_to_account(&self, storage_used: u64, deposit_used: u128, account_id: AccountId, deposit_in: bool) {
         let mut refund: u128 = 0;
         let mut required_cost = env::storage_byte_cost().saturating_mul(storage_used.into());
         if deposit_in {
             required_cost = required_cost.saturating_add(deposit_used.into());
         } else {
-            refund = refund.saturating_add(deposit_used.into());;
+            refund = refund.saturating_add(deposit_used.into());
         }
         let attached_deposit = env::attached_deposit();
 
         require!(required_cost <= attached_deposit);
-        // TODO: figure this out with near_token::NearToken
-//         require!(
-//             required_cost <= attached_deposit,
-//             format!("Must attach {} to cover storage", required_cost.exact_amount_display())
-//         );
 
         refund += attached_deposit.saturating_sub(required_cost);
-        // TODO: figure this out with near_token::NearToken
-        //if refund.as_yoctonear() > 1 {
         if refund > 1 {
             Promise::new(account_id).transfer(refund);
         }
@@ -148,18 +168,20 @@ impl ServiceRegistry {
 
     fn check_service_params(
         &self,
-        metadata: TokenMetadata,
         config_hash: [u8; 32],
         agent_ids: Vec<u32>,
         agent_num_instances: Vec<u32>,
-        agent_bonds: Vec<u64>
+        agent_bonds: Vec<u128>
     ) {
-        // TODO Check other fields?
-        // Number of copies must be equal to one
-        require!(metadata.copies.unwrap() == 1);
-
         // Check config hash
         require!(!config_hash.into_iter().all(|h| h == 0));
+
+        // Check uniqueness of agent ids: sorted agent ids must match its size with the original array
+        let mut check_agent_ids = agent_ids.clone();
+        check_agent_ids.sort_unstable();
+        check_agent_ids.dedup();
+        require!(check_agent_ids.len() == agent_ids.len());
+        //let v: Vec<_> = agent_ids.into_iter().unique().collect();
 
         // Check array lengths
         require!(agent_ids.len() == agent_bonds.len());
@@ -171,11 +193,11 @@ impl ServiceRegistry {
 
     fn fill_service_params(
         &mut self,
-        service_id: TokenId,
+        service_id: u32,
         config_hash: [u8; 32],
         agent_ids: Vec<u32>,
         agent_num_instances: Vec<u32>,
-        agent_bonds: Vec<u64>,
+        agent_bonds: Vec<u128>,
         threshold: u32
     ) {
         // Get the service
@@ -191,15 +213,18 @@ impl ServiceRegistry {
         for i in 0..agent_ids.len() {
             require!(agent_ids[i] > 0);
 
-            // Ignore zero agent params, as it could be the case for the service update
+            // Ignore zero agent params, as it is the case for the service update
             if agent_num_instances[i] > 0 && agent_bonds[i] > 0 {
-                let res = service.agent_params.insert(
-                    &agent_ids[i].to_string(),
-                    &Some(AgentParams{num_agent_instances: agent_num_instances[i], bond: agent_bonds[i]})
-                );
+                service.agent_ids.push(&agent_ids[i]);
 
-                // Check for the agent id uniqueness
-                require!(res == None);
+                service.agent_params.insert(
+                    &agent_ids[i],
+                    &AgentParams{
+                        num_agent_instances: agent_num_instances[i],
+                        bond: agent_bonds[i],
+                        instances: Vector::new(StorageKey::AgentInstancePerAgentId)
+                    }
+                );
 
                 // Adjust security deposit value
                 if security_deposit < agent_bonds[i] {
@@ -210,7 +235,7 @@ impl ServiceRegistry {
                 max_num_agent_instances += agent_num_instances[i];
             } else {
                 // Otherwise remove agent id and params
-                service.agent_params.remove(&agent_ids[i].to_string());
+                service.agent_params.remove(&agent_ids[i]);
             }
         }
 
@@ -228,16 +253,17 @@ impl ServiceRegistry {
         // Check if the config hash is equal to the previous one
         let mut equal = false;
         // Get the last config hash
-        let last = service.config_hashes.last();
+        let last = service.config_hashes.iter().last();
         // If there is no config hash, the service is being created
-        if last != None {
-            // Compare last and current config hashes
-            equal = last.unwrap().iter().zip(config_hash.iter()).all(|(a,b)| a == b);
+        // Otherwise there must be at least one config hash
+        if last.is_some() {
+            // Compare last and current config hashes if the service is updated
+            equal = last.unwrap().iter().zip(config_hash.iter()).all(|(a, b)| a == b);
         }
 
         // If the config hash is different, push it to the list of configs
         if !equal {
-            service.config_hashes.push(config_hash);
+            service.config_hashes.push(&config_hash);
         }
     }
 
@@ -250,14 +276,17 @@ impl ServiceRegistry {
         config_hash: [u8; 32],
         agent_ids: Vec<u32>,
         agent_num_instances: Vec<u32>,
-        agent_bonds: Vec<u64>,
+        agent_bonds: Vec<u128>,
         threshold: u32
     ) -> bool {
         // Record current storage usage
         let initial_storage_usage = env::storage_usage();
 
+        // TODO Check other fields?
+        // Number of copies must be equal to one
+        require!(metadata.copies.unwrap() == 1);
+
         self.check_service_params(
-            metadata.clone(),
             config_hash,
             agent_ids.clone(),
             agent_num_instances.clone(),
@@ -265,13 +294,13 @@ impl ServiceRegistry {
         );
 
         // Get the current total supply
-        let supply = self.tokens.owner_by_id.len();
+        let supply = self.tokens.owner_by_id.len() as u32;
         // To be consistent with EVM where Ids start from 1, each new token Id is equal to supply + 1
-        let service_id = (supply + 1).to_string();
+        let service_id = supply + 1;
 
         // Mint new service
         // This function is used such that the storage calculation is not engaged and deposit is not refunded
-        self.tokens.internal_mint_with_refund(service_id.clone(), service_owner, Some(metadata), None);
+        self.tokens.internal_mint_with_refund(service_id.to_string().clone(), service_owner, Some(metadata), None);
 
         // Allocate the service
         self.services.insert(
@@ -281,12 +310,15 @@ impl ServiceRegistry {
                 token: None,
                 security_deposit: 0,
                 multisig: None,
-                config_hashes: vec![],
+                config_hashes: Vector::new(StorageKey::ConfigHash),
                 threshold: 0,
                 max_num_agent_instances: 0,
                 num_agent_instances: 0,
                 state: ServiceState::PreRegistration,
-                agent_params: LookupMap::new(StorageKey::AgentParams),
+                agent_ids: Vector::new(StorageKey::AgentId),
+                agent_params: LookupMap::new(StorageKey::AgentParam),
+                agent_instances: LookupMap::new(StorageKey::AgentInstance),
+                operators: LookupMap::new(StorageKey::OperatorData)
             }
         );
 
@@ -302,7 +334,7 @@ impl ServiceRegistry {
 
         // Increased storage
         let storage = env::storage_usage() - initial_storage_usage;
-        ServiceRegistry::refund_deposit_to_account(storage, 0, env::predecessor_account_id(), true);
+        self.refund_deposit_to_account(storage, 0, env::predecessor_account_id(), true);
 
         // TODO: event
 
@@ -313,13 +345,12 @@ impl ServiceRegistry {
     #[payable]
     pub fn update(
         &mut self,
-        service_id: TokenId,
-        metadata: TokenMetadata,
+        service_id: u32,
         token: Option<AccountId>,
         config_hash: [u8; 32],
         agent_ids: Vec<u32>,
         agent_num_instances: Vec<u32>,
-        agent_bonds: Vec<u64>,
+        agent_bonds: Vec<u128>,
         threshold: u32
     ) {
         // Record current storage usage
@@ -328,12 +359,13 @@ impl ServiceRegistry {
         // Check for service owner
         let owner_id = self.tokens
             .owner_by_id
-            .get(&service_id)
+            .get(&service_id.to_string())
             .unwrap_or_else(|| env::panic_str("Token not found"));
         require!(env::predecessor_account_id() == owner_id, "Predecessor must be token owner.");
 
+        // TODO: Check that all current agent ids are updated / removes
+
         self.check_service_params(
-            metadata.clone(),
             config_hash,
             agent_ids.clone(),
             agent_num_instances.clone(),
@@ -352,19 +384,20 @@ impl ServiceRegistry {
 
         // Increased storage
         let storage = env::storage_usage() - initial_storage_usage;
-        ServiceRegistry::refund_deposit_to_account(storage, 0, env::predecessor_account_id(), true);
+        self.refund_deposit_to_account(storage, 0, env::predecessor_account_id(), true);
 
         // TODO: event
     }
 
+    #[payable]
     pub fn activate_registration(
         &mut self,
-        service_id: TokenId
+        service_id: u32
     ) {
         // Check for service owner
         let owner_id = self.tokens
             .owner_by_id
-            .get(&service_id)
+            .get(&service_id.to_string())
             .unwrap_or_else(|| env::panic_str("Token not found"));
         require!(env::predecessor_account_id() == owner_id, "Predecessor must be token owner.");
 
@@ -382,19 +415,89 @@ impl ServiceRegistry {
         // Increased storage
         // TODO: check if this is zero, as no storage is supposedly increased
         let storage = env::storage_usage() - initial_storage_usage;
-        ServiceRegistry::refund_deposit_to_account(storage, service.security_deposit, env::predecessor_account_id(), true);
+        self.refund_deposit_to_account(storage, service.security_deposit, env::predecessor_account_id(), true);
+
+        // TODO: event
+    }
+
+    #[payable]
+    pub fn register_agents(
+        &mut self,
+        service_id: u32,
+        agent_instances: Vec<AccountId>,
+        agent_ids: Vec<u32>,
+    ) {
+        // Check array lengths
+        require!(agent_ids.len() == agent_instances.len());
+
+        let operator = env::predecessor_account_id();
+
+        // Record current storage usage
+        let initial_storage_usage = env::storage_usage();
+
+        // Get the service
+        let mut service = self.services.get(&service_id).unwrap();
+
+        // Check the service state
+        require!(service.state == ServiceState::ActiveRegistration);
+
+        // Initialize or get operator struct
+        let mut operator_data = OperatorData{
+            balance: 0 as u128,
+            instances: Vector::new(StorageKey::AgentInstance)
+        };
+        match service.operators.get(&operator) {
+            Some(v) => operator_data = v,
+            None => {},
+        }
+
+        // Traverse agent instances and corresponding agent ids
+        let mut total_bond = 0 as u128;
+        for i in 0..agent_ids.len() {
+            // Operator address must be different from agent instance one
+            require!(operator != agent_instances[i]);
+
+            // Check for the account validity
+            require!(env::is_valid_account_id(agent_instances[i].as_ref().as_bytes()));
+
+            // Check if there is an empty slot for the agent instance in this specific service
+            let mut agent_params = service.agent_params.get(&agent_ids[i]).unwrap();
+            require!(agent_params.num_agent_instances > agent_params.instances.len() as u32);
+
+            // Check that the agent instance address is unique across all services
+            let res = self.agent_instance_operators.insert(&agent_instances[i], &operator);
+            require!(res.is_none());
+
+            // Add agent instance into corresponding maps
+            agent_params.instances.push(&agent_instances[i]);
+            operator_data.instances.push(&agent_instances[i]);
+            service.agent_instances.insert(&agent_instances[i], &agent_ids[i]);
+
+            // Increase the total number of agent instances in a service
+            service.num_agent_instances += 1;
+
+            // Increase the total bond
+            total_bond = total_bond.saturating_add(agent_params.bond.into());
+        }
+
+        // Update operator struct
+        operator_data.balance = operator_data.balance.saturating_add(total_bond.into());
+
+        // Increased storage
+        let storage = env::storage_usage() - initial_storage_usage;
+        self.refund_deposit_to_account(storage, total_bond, env::predecessor_account_id(), true);
 
         // TODO: event
     }
 
     pub fn terminate(
         &mut self,
-        service_id: TokenId
+        service_id: u32
     ) {
         // Check for service owner
         let owner_id = self.tokens
             .owner_by_id
-            .get(&service_id)
+            .get(&service_id.to_string())
             .unwrap_or_else(|| env::panic_str("Token not found"));
         require!(env::predecessor_account_id() == owner_id, "Predecessor must be token owner.");
 
@@ -414,13 +517,19 @@ impl ServiceRegistry {
             service.state = ServiceState::PreRegistration;
         }
 
-        // TODO: remove agent instances data?
+        // Remove agent instances data from agent params
+        for a in service.agent_ids.iter() {
+            service.agent_params.get(&a).unwrap().instances.clear();
+        }
+        
+        // TODO: Calculate refund of freed storage
 
         // Increased storage
         // TODO: check if this is zero, as no storage is supposedly increased
+        // TODO: This will mostly likely fail as the storage must decrease
         let storage = env::storage_usage() - initial_storage_usage;
         // Send the deposit back to the service owner
-        ServiceRegistry::refund_deposit_to_account(storage, service.security_deposit, env::predecessor_account_id(), false);
+        self.refund_deposit_to_account(storage, service.security_deposit, env::predecessor_account_id(), false);
 
         // TODO: event
     }
@@ -446,7 +555,7 @@ impl ServiceRegistry {
 //     }
 //
 //     #[payable]
-//     pub fn mint(&mut self, account_id: AccountId, amount: U128) {
+//     pub fn mint(&mut self, account_id: AccountId, amount: u128) {
 //         assert_eq!(
 //             env::predecessor_account_id(),
 //             self.controller,
@@ -480,8 +589,8 @@ impl ServiceRegistry {
         self.tokens.nft_total_supply()
     }
 
-    pub fn get_token_metadata(&self, token_id: TokenId) -> Option<TokenMetadata> {
-        self.tokens.token_metadata_by_id.as_ref().and_then(|by_id| by_id.get(&token_id))
+    pub fn get_token_metadata(&self, token_id: u32) -> Option<TokenMetadata> {
+        self.tokens.token_metadata_by_id.as_ref().and_then(|by_id| by_id.get(&token_id.to_string()))
     }
 
     pub fn version(&self) -> String {
