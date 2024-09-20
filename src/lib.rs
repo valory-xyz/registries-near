@@ -425,7 +425,7 @@ impl ServiceRegistry {
         &mut self,
         service_id: u32,
         agent_instances: Vec<AccountId>,
-        agent_ids: Vec<u32>,
+        agent_ids: Vec<u32>
     ) {
         // Check array lengths
         require!(agent_ids.len() == agent_instances.len());
@@ -480,11 +480,17 @@ impl ServiceRegistry {
             total_bond = total_bond.saturating_add(agent_params.bond.into());
         }
 
+        // If the service agent instance capacity is reached, the service registration is finished
+        if service.num_agent_instances == service.max_num_agent_instances {
+            service.state = ServiceState::FinishedRegistration;
+        }
+
         // Update operator struct
         operator_data.balance = operator_data.balance.saturating_add(total_bond.into());
 
         // Increased storage
         let storage = env::storage_usage() - initial_storage_usage;
+        // Consume storage and bond cost and refund the rest
         self.refund_deposit_to_account(storage, total_bond, env::predecessor_account_id(), true);
 
         // TODO: event
@@ -530,6 +536,67 @@ impl ServiceRegistry {
         let storage = env::storage_usage() - initial_storage_usage;
         // Send the deposit back to the service owner
         self.refund_deposit_to_account(storage, service.security_deposit, env::predecessor_account_id(), false);
+
+        // TODO: event
+    }
+
+   #[payable]
+    pub fn unbond(
+        &mut self,
+        service_id: u32
+    ) {
+        // Get the operator account
+        let operator = env::predecessor_account_id();
+
+        // Record current storage usage
+        let initial_storage_usage = env::storage_usage();
+
+        // Get the service
+        let mut service = self.services.get(&service_id).unwrap();
+
+        // Check the service state
+        require!(service.state == ServiceState::TerminatedBonded);
+
+        // Get the operator struct
+        let operator_data = service.operators.get(&operator).unwrap_or_else(|| env::panic_str("Operator has no instances"));
+
+        // Decrease the total number of agent instances in a service
+        service.num_agent_instances -= operator_data.instances.len() as u32;
+
+        // When number of instances is equal to zero, all the operators have unbonded and the service is moved into
+        // the PreRegistration state, from where it can be updated / initiate registration / get deployed again
+        if service.num_agent_instances == 0 {
+            service.state = ServiceState::PreRegistration;
+        }
+
+        // Calculate registration refund and clear all operator agent instances in thi service
+        let mut refund = 0 as u128;
+        for i in 0..operator_data.instances.len() {
+            // Get agent id by the agent instance
+            let agent_id = service.agent_instances.get(&operator_data.instances.get(i).unwrap()).unwrap();
+            // Get agent bond by agent id
+            let bond = service.agent_params.get(&agent_id).unwrap().bond;
+            // Add bond to the refund
+            refund = refund.saturating_add(bond.into());
+
+            // Remove the relevant data
+            self.agent_instance_operators.remove(&operator_data.instances.get(i).unwrap());
+            service.agent_instances.remove(&operator_data.instances.get(i).unwrap());
+        }
+        // Check if the refund exceeds operator's balance
+        // This situation is possible if the operator was slashed for the agent instance misbehavior
+        if refund > operator_data.balance {
+            refund = operator_data.balance;
+        }
+
+        // Remove the operator data from current service
+        service.operators.remove(&operator);
+
+        // Increased storage
+        // TODO: need to correctly recalculate
+        let storage = env::storage_usage() - initial_storage_usage;
+        // Refund storage, bond cost and the rest
+        self.refund_deposit_to_account(storage, refund, env::predecessor_account_id(), false);
 
         // TODO: event
     }
