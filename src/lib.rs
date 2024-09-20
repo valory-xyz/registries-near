@@ -225,14 +225,15 @@ impl ServiceRegistry {
 
         // Process agent ids and corresponding agent params
         for i in 0..agent_ids.len() {
-            require!(agent_ids[i] > 0);
+            let agent_id = agent_ids[i];
+            require!(agent_id > 0);
 
             // Ignore zero agent params, as it is the case for the service update
             if agent_num_instances[i] > 0 && agent_bonds[i] > 0 {
-                service.agent_ids.push(&agent_ids[i]);
+                service.agent_ids.push(&agent_id);
 
                 service.agent_params.insert(
-                    &agent_ids[i],
+                    &agent_id,
                     &AgentParams{
                         num_agent_instances: agent_num_instances[i],
                         bond: agent_bonds[i],
@@ -249,7 +250,7 @@ impl ServiceRegistry {
                 max_num_agent_instances += agent_num_instances[i];
             } else {
                 // Otherwise remove agent id and params
-                service.agent_params.remove(&agent_ids[i]);
+                service.agent_params.remove(&agent_id);
             }
         }
 
@@ -468,24 +469,27 @@ impl ServiceRegistry {
         // Traverse agent instances and corresponding agent ids
         let mut total_bond = 0 as u128;
         for i in 0..agent_ids.len() {
+            let agent_id = agent_ids[i];
+            let agent_instance = agent_instances[i].clone();
+
             // Operator address must be different from agent instance one
-            require!(operator != agent_instances[i]);
+            require!(operator != agent_instance);
 
             // Check account validity
-            require!(env::is_valid_account_id(agent_instances[i].as_ref().as_bytes()));
+            require!(env::is_valid_account_id(agent_instance.as_ref().as_bytes()));
 
             // Check if there is an empty slot for the agent instance in this specific service
-            let mut agent_params = service.agent_params.get(&agent_ids[i]).unwrap();
+            let mut agent_params = service.agent_params.get(&agent_id).unwrap();
             require!(agent_params.num_agent_instances > agent_params.instances.len() as u32);
 
             // Check that the agent instance address is unique across all services
-            let res = self.agent_instance_operators.insert(&agent_instances[i], &operator);
+            let res = self.agent_instance_operators.insert(&agent_instance, &operator);
             require!(res.is_none());
 
             // Add agent instance into corresponding maps
-            agent_params.instances.push(&agent_instances[i]);
-            operator_data.instances.push(&agent_instances[i]);
-            service.agent_instances.insert(&agent_instances[i], &agent_ids[i]);
+            agent_params.instances.push(&agent_instance);
+            operator_data.instances.push(&agent_instance);
+            service.agent_instances.insert(&agent_instance, &agent_id);
 
             // Increase the total number of agent instances in a service
             service.num_agent_instances += 1;
@@ -510,6 +514,63 @@ impl ServiceRegistry {
         // TODO: event
     }
 
+    // TODO: needs to be payable?
+    #[payable]
+    pub fn slash(
+        &mut self,
+        agent_instances: Vec<AccountId>,
+        amounts: Vec<u128>,
+        service_id: u32
+    ) {
+        // Check array lengths
+        require!(amounts.len() == agent_instances.len());
+
+        // Record current storage usage
+        let initial_storage_usage = env::storage_usage();
+
+        // Get the service
+        let service = self.services.get(&service_id).unwrap();
+
+        // Check if the service is already terminated
+        require!(service.state == ServiceState::Deployed);
+
+        // Only the multisig of a correspondent address can slash its agent instances
+        require!(service.multisig.unwrap() == env::predecessor_account_id());
+
+        // Traverse all agent instances
+        for i in 0..agent_instances.len() {
+            let amount = amounts[i];
+            let agent_instance = agent_instances[i].clone();
+
+            // Get the operator and its balance
+            let operator = self.agent_instance_operators.get(&agent_instance).unwrap();
+            let mut operator_data = service.operators.get(&operator).unwrap();
+            let mut balance = operator_data.balance;
+
+            // Slash the balance of the operator, make sure it does not go below zero
+            if amount >= balance {
+                // We cannot add to the slashed amount more than the balance of the operator
+                self.slashed_funds = self.slashed_funds.saturating_add(balance.into());
+                balance = 0;
+            } else {
+                self.slashed_funds = self.slashed_funds.saturating_add(amount.into());
+                balance = balance.saturating_sub(amount.into());
+            }
+
+            // Update the operator balance value
+            operator_data.balance = balance;
+
+            // TODO event
+        }
+
+        // Increased storage
+        let storage = env::storage_usage() - initial_storage_usage;
+        // TODO this is probably not needed as no storage is affected
+        self.refund_deposit_to_account(storage, 0, env::predecessor_account_id(), true);
+    }
+
+    // TODO: needs to be payable?
+    #[payable]
     pub fn terminate(
         &mut self,
         service_id: u32
@@ -554,7 +615,7 @@ impl ServiceRegistry {
         // TODO: event
     }
 
-   #[payable]
+    #[payable]
     pub fn unbond(
         &mut self,
         service_id: u32
@@ -615,12 +676,15 @@ impl ServiceRegistry {
         // TODO: event
     }
 
+    // TODO Shall this be payable as 1 yocto is needed for?
     pub fn drain(&mut self) {
         // Check the ownership
         require!(self.owner == env::predecessor_account_id());
 
         let amount = self.slashed_funds;
+        // TODO: 1 or 0 here?
         if amount > 1 {
+            self.slashed_funds = 0;
             Promise::new(env::predecessor_account_id()).transfer(amount);
         }
 
