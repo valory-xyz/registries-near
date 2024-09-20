@@ -81,6 +81,7 @@ pub struct Service {
 #[near_bindgen]
 #[derive(BorshDeserialize, BorshSerialize, PanicOnDefault)]
 pub struct ServiceRegistry {
+    owner: AccountId,
     services: LookupMap<u32, Service>,
     tokens: NonFungibleToken,
     metadata: LazyOption<NFTContractMetadata>,
@@ -133,6 +134,7 @@ impl ServiceRegistry {
         assert!(!env::state_exists(), "Already initialized");
         metadata.assert_valid();
         Self {
+            owner: env::predecessor_account_id(),
             services: LookupMap::new(StorageKey::Service),
             tokens: NonFungibleToken::new(
                 StorageKey::NonFungibleToken,
@@ -164,6 +166,18 @@ impl ServiceRegistry {
         if refund > 1 {
             Promise::new(account_id).transfer(refund);
         }
+    }
+
+    pub fn change_owner(&mut self, new_owner: AccountId) {
+        // Check the ownership
+        require!(self.owner == env::predecessor_account_id());
+
+        // Check account validity
+        require!(env::is_valid_account_id(new_owner.as_ref().as_bytes()));
+
+        self.owner = new_owner;
+
+        // TODO: event
     }
 
     fn check_service_params(
@@ -457,7 +471,7 @@ impl ServiceRegistry {
             // Operator address must be different from agent instance one
             require!(operator != agent_instances[i]);
 
-            // Check for the account validity
+            // Check account validity
             require!(env::is_valid_account_id(agent_instances[i].as_ref().as_bytes()));
 
             // Check if there is an empty slot for the agent instance in this specific service
@@ -593,10 +607,22 @@ impl ServiceRegistry {
         service.operators.remove(&operator);
 
         // Increased storage
-        // TODO: need to correctly recalculate
+        // TODO: need to correctly recalculate the storage decrease
         let storage = env::storage_usage() - initial_storage_usage;
         // Refund storage, bond cost and the rest
         self.refund_deposit_to_account(storage, refund, env::predecessor_account_id(), false);
+
+        // TODO: event
+    }
+
+    pub fn drain(&mut self) {
+        // Check the ownership
+        require!(self.owner == env::predecessor_account_id());
+
+        let amount = self.slashed_funds;
+        if amount > 1 {
+            Promise::new(env::predecessor_account_id()).transfer(amount);
+        }
 
         // TODO: event
     }
