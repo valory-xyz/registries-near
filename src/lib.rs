@@ -7,9 +7,11 @@ use near_sdk::borsh::{self, BorshDeserialize, BorshSerialize};
 use near_sdk::json_types::{Base64VecU8, U128};
 use near_sdk::collections::LazyOption;
 use near_sdk::{
-    env, near_bindgen, require, AccountId, BorshStorageKey, PanicOnDefault, Promise, PromiseOrValue, StorageUsage,
+    env, near_bindgen, require, AccountId, BorshStorageKey, PanicOnDefault, Promise, PromiseOrValue, StorageUsage, Gas,
+    PromiseError
 };
 use near_sdk::collections::{LookupMap, Vector};
+use near_sdk::ext_contract;
 //use near_account_id::{AccountId};
 //near_token::NearToken
 //use near_gas::NearGas;
@@ -20,6 +22,18 @@ use near_sdk::collections::{LookupMap, Vector};
 // const NO_DEPOSIT: Balance = 0;
 // const CURRENT_STATE_VERSION: u32 = 1;
 // const TGAS: u64 = 1_000_000_000_000;
+
+// Validator interface, for cross-contract calls (ttt.ttt_00.testnet)
+#[ext_contract(multisig_factory)]
+trait MultisigFactory {
+    fn create(
+        &mut self,
+        name: AccountId,
+        members: Vec<AccountId>,
+        num_confirmations: u64,
+    ) -> Promise;
+    //fn is_paused(&self) -> bool;
+}
 
 #[derive(BorshDeserialize, BorshSerialize, PartialEq)]
 pub enum ServiceState {
@@ -77,6 +91,8 @@ pub struct Service {
     // Map of operators in the service and their corresponding OperatorData struct
     pub operators: LookupMap<AccountId, OperatorData>
 }
+
+const TGAS: u64 = 1_000_000_000_000;
 
 #[near_bindgen]
 #[derive(BorshDeserialize, BorshSerialize, PanicOnDefault)]
@@ -451,6 +467,7 @@ impl ServiceRegistry {
         let initial_storage_usage = env::storage_usage();
 
         // Get the service
+        // TODO Check if service id exists?
         let mut service = self.services.get(&service_id).unwrap();
 
         // Check the service state
@@ -512,6 +529,77 @@ impl ServiceRegistry {
         self.refund_deposit_to_account(storage, total_bond, env::predecessor_account_id(), true);
 
         // TODO: event
+    }
+
+    // TODO: needs to be payable?
+    #[payable]
+    pub fn deploy(
+        &mut self,
+        service_id: u32,
+        name_multisig: AccountId
+    ) {
+        // Record current storage usage
+        let initial_storage_usage = env::storage_usage();
+
+        // Check for service owner
+        let owner_id = self.tokens
+            .owner_by_id
+            .get(&service_id.to_string())
+            .unwrap_or_else(|| env::panic_str("Token not found"));
+        require!(env::predecessor_account_id() == owner_id, "Predecessor must be token owner.");
+
+        // Get the service
+        let service = self.services.get(&service_id).unwrap();
+
+        // Check if the service is already terminated
+        require!(service.state == ServiceState::FinishedRegistration);
+
+        // Get all agent instances for the multisig
+        let mut agent_instances = Vec::new();
+        for a in service.agent_ids.iter() {
+            agent_instances.extend(service.agent_params.get(&a).unwrap().instances.iter());
+        }
+
+        let multisig = service.multisig;
+        if multisig.is_none() || multisig.unwrap() != name_multisig {
+            // Create new multisig
+            //log!("Calling external");
+            // Create a promise to call TestToken.is_paused()
+            let promise = multisig_factory::ext(name_multisig.clone())
+               .with_static_gas(Gas(5 * TGAS))
+               .create(name_multisig.clone(), agent_instances.clone(), service.threshold as u64);
+
+            promise.then(
+               // Create a promise to callback query_greeting_callback
+               Self::ext(env::current_account_id())
+                   .with_static_gas(Gas(5 * TGAS))
+                   .create_multisig_callback(service_id),
+            );
+        } else {
+            // Check multisig owners
+        }
+
+        // Increased storage
+        let storage = env::storage_usage() - initial_storage_usage;
+        // TODO this is probably not needed as no storage is affected in this contract
+        self.refund_deposit_to_account(storage, 0, env::predecessor_account_id(), true);
+    }
+
+    #[private] // Public - but only callable by env::current_account_id()
+    pub fn create_multisig_callback(
+        &self,
+        service_id: u32,
+        #[callback_result] call_result: Result<bool, PromiseError>,
+    ) -> bool {
+        // Check if the promise succeeded by calling the method outlined in external.rs
+        if call_result.is_err() {
+            //log!("There was an error contacting Hello NEAR");
+        }
+
+        // Get the service
+        let mut service = self.services.get(&service_id).unwrap();
+        service.state = ServiceState::Deployed;
+        true
     }
 
     // TODO: needs to be payable?
@@ -754,3 +842,14 @@ impl ServiceRegistry {
         env!("CARGO_PKG_VERSION").to_owned()
     }
 }
+
+// near_contract_standards::impl_non_fungible_token_core!(ServiceRegistry, tokens);
+// near_contract_standards::impl_non_fungible_token_approval!(ServiceRegistry, tokens);
+// near_contract_standards::impl_non_fungible_token_enumeration!(ServiceRegistry, tokens);
+//
+// #[near_bindgen]
+// impl NonFungibleTokenMetadataProvider for ServiceRegistry {
+//     fn nft_metadata(&self) -> NFTContractMetadata {
+//         self.metadata.get().unwrap()
+//     }
+// }
