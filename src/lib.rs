@@ -538,9 +538,6 @@ impl ServiceRegistry {
         service_id: u32,
         name_multisig: AccountId
     ) {
-        // Record current storage usage
-        let initial_storage_usage = env::storage_usage();
-
         // Check for service owner
         let owner_id = self.tokens
             .owner_by_id
@@ -579,11 +576,6 @@ impl ServiceRegistry {
         } else {
             // Check multisig owners
         }
-
-        // Increased storage
-        let storage = env::storage_usage() - initial_storage_usage;
-        // TODO this is probably not needed as no storage is affected in this contract
-        self.refund_deposit_to_account(storage, 0, env::predecessor_account_id(), true);
     }
 
     #[private] // Public - but only callable by env::current_account_id()
