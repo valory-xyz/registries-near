@@ -567,6 +567,7 @@ impl ServiceRegistry {
             // Create a promise to call TestToken.is_paused()
             let promise = multisig_factory::ext(name_multisig.clone())
                .with_static_gas(Gas(5 * TGAS))
+               .transfer(env::attached_deposit())
                .create(name_multisig.clone(), agent_instances.clone(), service.threshold as u64);
 
             promise.then(
