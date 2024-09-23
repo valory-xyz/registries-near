@@ -26,13 +26,13 @@ use near_sdk::ext_contract;
 // Validator interface, for cross-contract calls (ttt.ttt_00.testnet)
 #[ext_contract(multisig_factory)]
 trait MultisigFactory {
+    #[payable]
     fn create(
         &mut self,
         name: AccountId,
         members: Vec<AccountId>,
         num_confirmations: u64,
     ) -> Promise;
-    //fn is_paused(&self) -> bool;
 }
 
 #[derive(BorshDeserialize, BorshSerialize, PartialEq)]
