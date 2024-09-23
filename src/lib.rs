@@ -23,7 +23,7 @@ use near_sdk::ext_contract;
 // const CURRENT_STATE_VERSION: u32 = 1;
 // const TGAS: u64 = 1_000_000_000_000;
 
-// Validator interface, for cross-contract calls (ttt.ttt_00.testnet)
+// MultisigFactory interface
 #[ext_contract(multisig_factory)]
 trait MultisigFactory {
     #[payable]
@@ -34,6 +34,13 @@ trait MultisigFactory {
         num_confirmations: u64,
     ) -> Promise;
 }
+
+// Multisig2 interface
+#[ext_contract(multisig2)]
+trait Multisig2 {
+    fn get_members(&self) -> Vec<AccountId>;
+}
+
 
 #[derive(BorshDeserialize, BorshSerialize, PartialEq)]
 pub enum ServiceState {
@@ -557,24 +564,38 @@ impl ServiceRegistry {
             agent_instances.extend(service.agent_params.get(&a).unwrap().instances.iter());
         }
 
+        // Check if the multisig is not set => the service was never deployed
+        // or if the multisig account does not the provided one => override current multisig with a new one
         let multisig = service.multisig;
-        if multisig.is_none() || multisig.unwrap() != name_multisig {
+        if multisig.is_none() || multisig.clone().unwrap() != name_multisig {
             // Create new multisig
             //log!("Calling external");
             // Create a promise to call TestToken.is_paused()
             let promise = multisig_factory::ext(name_multisig.clone())
-               .with_static_gas(Gas(5 * TGAS))
-               .transfer(env::attached_deposit())
-               .create(name_multisig.clone(), agent_instances.clone(), service.threshold as u64);
+                .with_static_gas(Gas(5 * TGAS))
+                .transfer(env::attached_deposit())
+                .create(name_multisig.clone(), agent_instances.clone(), service.threshold as u64);
 
             promise.then(
-               // Create a promise to callback query_greeting_callback
+               // Create a promise to callback create_multisig_callback
                Self::ext(env::current_account_id())
                    .with_static_gas(Gas(5 * TGAS))
-                   .create_multisig_callback(service_id),
+                   .create_multisig_callback(service_id, name_multisig.clone())
             );
         } else {
-            // Check multisig owners
+            // Update multisig with the new owners set
+            // Get multisig owners
+            let promise = multisig2::ext(multisig.unwrap().clone())
+                .with_static_gas(Gas(5 * TGAS))
+                .get_members();
+
+            // Compare multisig owners with the set of agent instances
+            promise.then(
+               // Create a promise to callback update_multisig_callback
+               Self::ext(env::current_account_id())
+                   .with_static_gas(Gas(5 * TGAS))
+                   .update_multisig_callback(service_id, agent_instances.clone())
+            );
         }
     }
 
@@ -582,6 +603,7 @@ impl ServiceRegistry {
     pub fn create_multisig_callback(
         &self,
         service_id: u32,
+        name_multisig: AccountId,
         #[callback_result] call_result: Result<bool, PromiseError>,
     ) -> bool {
         // Check if the promise succeeded by calling the method outlined in external.rs
@@ -589,10 +611,39 @@ impl ServiceRegistry {
             //log!("There was an error contacting Hello NEAR");
         }
 
-        // Get the service
+        // Get the service, record its multisig and update state
         let mut service = self.services.get(&service_id).unwrap();
+        service.multisig = Some(name_multisig);
         service.state = ServiceState::Deployed;
         true
+    }
+
+    #[private] // Public - but only callable by env::current_account_id()
+    pub fn update_multisig_callback(
+        &self,
+        service_id: u32,
+        agent_instances: Vec<AccountId>,
+        #[callback_result] call_result: Result<Vec<AccountId>, PromiseError>,
+    ) -> bool {
+        // Check if the promise succeeded by calling the method outlined in external.rs
+        if call_result.is_err() {
+            //log!("There was an error contacting Hello NEAR");
+        }
+
+        // Get the service, record its multisig and update state
+        let mut service = self.services.get(&service_id).unwrap();
+
+        // Check agent instances vs multisig members
+        let multisig_members = call_result.unwrap();
+        let matching = agent_instances.iter().zip(multisig_members.iter()).filter(|&(agent_instances, multisig_members)| agent_instances == multisig_members).count();
+        let mut result = false;
+        if matching == agent_instances.len() && matching == multisig_members.len() {
+            // Update service state
+            service.state = ServiceState::Deployed;
+            result = true;
+        }
+
+        result
     }
 
     // TODO: needs to be payable?
