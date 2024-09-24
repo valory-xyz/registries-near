@@ -574,32 +574,26 @@ impl ServiceRegistry {
             let promise = multisig_factory::ext(name_multisig.clone())
                 .with_static_gas(Gas(5 * TGAS))
                 //.transfer(env::attached_deposit())
-                .create(name_multisig.clone(), agent_instances.clone(), service.threshold as u64);
-
-            promise.then(
-               // Create a promise to callback create_multisig_callback
-               Self::ext(env::current_account_id())
-                   .with_static_gas(Gas(5 * TGAS))
-                   .create_multisig_callback(service_id, name_multisig.clone())
-            );
-
-            // TODO: event
+                .create(name_multisig.clone(), agent_instances.clone(), service.threshold as u64)
+                .then(
+                   // Create a promise to callback create_multisig_callback
+                   Self::ext(env::current_account_id())
+                       .with_static_gas(Gas(5 * TGAS))
+                       .create_multisig_callback(service_id, name_multisig.clone())
+                );
         } else {
             // Update multisig with the new owners set
             // Get multisig owners
-            let promise = multisig2::ext(multisig.unwrap().clone())
+            multisig2::ext(multisig.unwrap().clone())
                 .with_static_gas(Gas(5 * TGAS))
-                .get_members();
-
-            // Compare multisig owners with the set of agent instances
-            promise.then(
-               // Create a promise to callback update_multisig_callback
-               Self::ext(env::current_account_id())
-                   .with_static_gas(Gas(5 * TGAS))
-                   .update_multisig_callback(service_id, agent_instances.clone())
-            );
-
-            // TODO: event
+                .get_members()
+                // Compare multisig owners with the set of agent instances
+                .then(
+                   // Create a promise to callback update_multisig_callback
+                   Self::ext(env::current_account_id())
+                       .with_static_gas(Gas(5 * TGAS))
+                       .update_multisig_callback(service_id, agent_instances.clone())
+                );
         }
     }
 
@@ -619,6 +613,8 @@ impl ServiceRegistry {
         let mut service = self.services.get(&service_id).unwrap();
         service.multisig = Some(name_multisig);
         service.state = ServiceState::Deployed;
+
+        // TODO: event
     }
 
     #[private]
@@ -648,6 +644,9 @@ impl ServiceRegistry {
 
         // Revert if the multisig members comparison fails
         require!(success);
+
+        // TODO: event
+
         success
     }
 
