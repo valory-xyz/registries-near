@@ -573,7 +573,7 @@ impl ServiceRegistry {
             // Create a promise to call TestToken.is_paused()
             let promise = multisig_factory::ext(name_multisig.clone())
                 .with_static_gas(Gas(5 * TGAS))
-                .transfer(env::attached_deposit())
+                //.transfer(env::attached_deposit())
                 .create(name_multisig.clone(), agent_instances.clone(), service.threshold as u64);
 
             promise.then(
@@ -582,6 +582,8 @@ impl ServiceRegistry {
                    .with_static_gas(Gas(5 * TGAS))
                    .create_multisig_callback(service_id, name_multisig.clone())
             );
+
+            // TODO: event
         } else {
             // Update multisig with the new owners set
             // Get multisig owners
@@ -596,6 +598,8 @@ impl ServiceRegistry {
                    .with_static_gas(Gas(5 * TGAS))
                    .update_multisig_callback(service_id, agent_instances.clone())
             );
+
+            // TODO: event
         }
     }
 
@@ -604,8 +608,8 @@ impl ServiceRegistry {
         &self,
         service_id: u32,
         name_multisig: AccountId,
-        #[callback_result] call_result: Result<bool, PromiseError>,
-    ) -> bool {
+        #[callback_result] call_result: Result<(), PromiseError>,
+    ) {
         // Check if the promise succeeded by calling the method outlined in external.rs
         if call_result.is_err() {
             //log!("There was an error contacting Hello NEAR");
@@ -615,10 +619,9 @@ impl ServiceRegistry {
         let mut service = self.services.get(&service_id).unwrap();
         service.multisig = Some(name_multisig);
         service.state = ServiceState::Deployed;
-        true
     }
 
-    #[private] // Public - but only callable by env::current_account_id()
+    #[private]
     pub fn update_multisig_callback(
         &self,
         service_id: u32,
@@ -635,15 +638,17 @@ impl ServiceRegistry {
 
         // Check agent instances vs multisig members
         let multisig_members = call_result.unwrap();
-        let matching = agent_instances.iter().zip(multisig_members.iter()).filter(|&(agent_instances, multisig_members)| agent_instances == multisig_members).count();
-        let mut result = false;
+        let matching = agent_instances.iter().zip(multisig_members.iter()).filter(|&(ai, mm)| ai == mm).count();
+        let mut success = false;
         if matching == agent_instances.len() && matching == multisig_members.len() {
             // Update service state
             service.state = ServiceState::Deployed;
-            result = true;
+            success = true;
         }
 
-        result
+        // Revert if the multisig members comparison fails
+        require!(success);
+        success
     }
 
     // TODO: needs to be payable?
