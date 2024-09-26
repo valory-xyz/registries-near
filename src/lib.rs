@@ -5,6 +5,7 @@ use near_contract_standards::non_fungible_token::enumeration::NonFungibleTokenEn
 use near_contract_standards::non_fungible_token::{NonFungibleToken, Token};
 use near_sdk::borsh::{self, BorshDeserialize, BorshSerialize};
 use near_sdk::json_types::{Base64VecU8, U128};
+use near_sdk::serde_json::json;
 use near_sdk::collections::LazyOption;
 use near_sdk::{
     env, near_bindgen, require, AccountId, BorshStorageKey, PanicOnDefault, Promise, PromiseOrValue, StorageUsage, Gas,
@@ -100,6 +101,8 @@ pub struct Service {
 }
 
 const TGAS: u64 = 1_000_000_000_000;
+const CREATE_CALL_GAS: u64 = 50_000_000_000_000;
+const MULTISIG_FACTORY: &str = "multisafe.near";
 
 #[near_bindgen]
 #[derive(BorshDeserialize, BorshSerialize, PanicOnDefault)]
@@ -110,7 +113,7 @@ pub struct ServiceRegistry {
     metadata: LazyOption<NFTContractMetadata>,
     agent_instance_operators: LookupMap<AccountId, AccountId>,
     slashed_funds: u128,
-    paused: bool,
+    paused: bool
 }
 
 const DATA_IMAGE_SVG_NEAR_ICON: &str = "data:image/svg+xml,%3Csvg xmlns='http://www.w3.org/2000/svg' viewBox='0 0 288 288'%3E%3Cg id='l' data-name='l'%3E%3Cpath d='M187.58,79.81l-30.1,44.69a3.2,3.2,0,0,0,4.75,4.2L191.86,103a1.2,1.2,0,0,1,2,.91v80.46a1.2,1.2,0,0,1-2.12.77L102.18,77.93A15.35,15.35,0,0,0,90.47,72.5H87.34A15.34,15.34,0,0,0,72,87.84V201.16A15.34,15.34,0,0,0,87.34,216.5h0a15.35,15.35,0,0,0,13.08-7.31l30.1-44.69a3.2,3.2,0,0,0-4.75-4.2L96.14,186a1.2,1.2,0,0,1-2-.91V104.61a1.2,1.2,0,0,1,2.12-.77l89.55,107.23a15.35,15.35,0,0,0,11.71,5.43h3.13A15.34,15.34,0,0,0,216,201.16V87.84A15.34,15.34,0,0,0,200.66,72.5h0A15.35,15.35,0,0,0,187.58,79.81Z'/%3E%3C/g%3E%3C/svg%3E";
@@ -169,7 +172,7 @@ impl ServiceRegistry {
             metadata: LazyOption::new(StorageKey::Metadata, Some(&metadata)),
             agent_instance_operators: LookupMap::new(StorageKey::AgentInstanceOperator),
             slashed_funds: 0 as u128,
-            paused: false,
+            paused: false
         }
     }
 
@@ -398,7 +401,7 @@ impl ServiceRegistry {
         let owner_id = self.tokens
             .owner_by_id
             .get(&service_id.to_string())
-            .unwrap_or_else(|| env::panic_str("Token not found"));
+            .unwrap_or_else(|| env::panic_str("Service not found"));
         require!(env::predecessor_account_id() == owner_id, "Predecessor must be token owner.");
 
         // TODO: Check that all current agent ids are updated / removes
@@ -436,7 +439,7 @@ impl ServiceRegistry {
         let owner_id = self.tokens
             .owner_by_id
             .get(&service_id.to_string())
-            .unwrap_or_else(|| env::panic_str("Token not found"));
+            .unwrap_or_else(|| env::panic_str("Service not found"));
         require!(env::predecessor_account_id() == owner_id, "Predecessor must be token owner.");
 
         // Record current storage usage
@@ -549,7 +552,7 @@ impl ServiceRegistry {
         let owner_id = self.tokens
             .owner_by_id
             .get(&service_id.to_string())
-            .unwrap_or_else(|| env::panic_str("Token not found"));
+            .unwrap_or_else(|| env::panic_str("Service not found"));
         require!(env::predecessor_account_id() == owner_id, "Predecessor must be token owner.");
 
         // Get the service
@@ -571,10 +574,17 @@ impl ServiceRegistry {
             // Create new multisig
             //log!("Calling external");
             // Create a promise to call TestToken.is_paused()
-            let promise = multisig_factory::ext(name_multisig.clone())
-                .with_static_gas(Gas(5 * TGAS))
-                //.transfer(env::attached_deposit())
-                .create(name_multisig.clone(), agent_instances.clone(), service.threshold as u64)
+            let promise = Promise::new(MULTISIG_FACTORY.parse().unwrap())
+                .transfer(env::attached_deposit())
+                .function_call(
+                    "create".to_string(),
+                    json!({ "name": name_multisig.clone(), "members": agent_instances.clone(), "num_confirmations": service.threshold as u64 })
+                        .to_string()
+                        .as_bytes()
+                        .to_vec(),
+                    0,
+                    env::prepaid_gas() - Gas(CREATE_CALL_GAS),
+                )
                 .then(
                    // Create a promise to callback create_multisig_callback
                    Self::ext(env::current_account_id())
@@ -715,7 +725,7 @@ impl ServiceRegistry {
         let owner_id = self.tokens
             .owner_by_id
             .get(&service_id.to_string())
-            .unwrap_or_else(|| env::panic_str("Token not found"));
+            .unwrap_or_else(|| env::panic_str("Service not found"));
         require!(env::predecessor_account_id() == owner_id, "Predecessor must be token owner.");
 
         // Record current storage usage
@@ -752,10 +762,7 @@ impl ServiceRegistry {
     }
 
     #[payable]
-    pub fn unbond(
-        &mut self,
-        service_id: u32
-    ) {
+    pub fn unbond(&mut self, service_id: u32) {
         // Get the operator account
         let operator = env::predecessor_account_id();
 
@@ -826,6 +833,18 @@ impl ServiceRegistry {
 
         // TODO: event
     }
+
+//     pub fn get_service(&self, service_id: u32) -> Service {
+//         self.services.get(&service_id).unwrap_or_default()
+//     }
+//
+//     pub fn get_agent_params(&self, service_id: u32) -> Vec<AgentParams> {
+//         let mut agent_params = Vec::new();
+//
+//         // Get the service
+//         let service = self.services.get(&service_id).unwrap_or_default();//unwrap_or_else(|| env::panic_str("Service not found"));
+//         agent_params
+//     }
 
 //     pub fn set_metadata(
 //         &mut self,
