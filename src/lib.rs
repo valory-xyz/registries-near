@@ -12,7 +12,7 @@ use near_sdk::{
     env, near, require, AccountId, BorshStorageKey, PanicOnDefault, Promise, PromiseOrValue, StorageUsage, Gas,
     IntoStorageKey, PromiseError, NearToken
 };
-use near_sdk::collections::{LookupMap, Vector};
+use near_sdk::store::{LookupMap, Vector};
 use near_sdk::ext_contract;
 //use near_account_id::{AccountId};
 //near_token::NearToken
@@ -45,7 +45,7 @@ trait Multisig2 {
 
 
 #[near(serializers=[borsh])]
-#[derive(PartialEq)]
+#[derive(PartialEq, Clone)]
 pub enum ServiceState {
     NonExistent,
     PreRegistration,
@@ -244,7 +244,7 @@ impl ServiceRegistry {
         threshold: u32
     ) {
         // Get the service
-        let mut service = self.services.get(&service_id).unwrap();
+        let service = self.services.get_mut(&service_id).unwrap();
 
         // Check the service state
         require!(service.state == ServiceState::PreRegistration);
@@ -259,11 +259,11 @@ impl ServiceRegistry {
 
             // Ignore zero agent params, as it is the case for the service update
             if agent_num_instances[i] > 0 && agent_bonds[i] > 0 {
-                service.agent_ids.push(&agent_id);
+                service.agent_ids.push(agent_id);
 
                 service.agent_params.insert(
-                    &agent_id,
-                    &AgentParams{
+                    agent_id,
+                    AgentParams{
                         num_agent_instances: agent_num_instances[i],
                         bond: agent_bonds[i],
                         instances: Vector::new(StorageKey::AgentInstancePerAgentId)
@@ -307,7 +307,7 @@ impl ServiceRegistry {
 
         // If the config hash is different, push it to the list of configs
         if !equal {
-            service.config_hashes.push(&config_hash);
+            service.config_hashes.push(config_hash);
         }
     }
 
@@ -325,8 +325,6 @@ impl ServiceRegistry {
     ) -> bool {
         // Record current storage usage
         let initial_storage_usage = env::storage_usage();
-
-        let config_hash: [u8; 32] = [42; 32];
 
         // TODO Check other fields?
         // Number of copies must be equal to one
@@ -350,8 +348,8 @@ impl ServiceRegistry {
 
         // Allocate the service
         self.services.insert(
-            &service_id,
-            &Service {
+            service_id,
+            Service {
                 // TODO: change with just token when other tokens are enabled
                 token: None,
                 security_deposit: 0,
@@ -451,7 +449,7 @@ impl ServiceRegistry {
         let initial_storage_usage = env::storage_usage();
 
         // Get the service
-        let mut service = self.services.get(&service_id).unwrap();
+        let service = self.services.get_mut(&service_id).unwrap();
 
         // Check the service state
         require!(service.state == ServiceState::PreRegistration);
@@ -461,7 +459,8 @@ impl ServiceRegistry {
         // Increased storage
         // TODO: check if this is zero, as no storage is supposedly increased
         let storage = env::storage_usage() - initial_storage_usage;
-        self.refund_deposit_to_account(storage, service.security_deposit, env::predecessor_account_id(), true);
+        let deposit = service.security_deposit;
+        self.refund_deposit_to_account(storage, deposit, env::predecessor_account_id(), true);
 
         // TODO: event
     }
@@ -483,17 +482,17 @@ impl ServiceRegistry {
 
         // Get the service
         // TODO Check if service id exists?
-        let mut service = self.services.get(&service_id).unwrap();
+        let service = self.services.get_mut(&service_id).unwrap();
 
         // Check the service state
         require!(service.state == ServiceState::ActiveRegistration);
 
         // Initialize or get operator struct
-        let mut operator_data = OperatorData{
+        let mut operator_data = &mut OperatorData{
             balance: 0 as u128,
             instances: Vector::new(StorageKey::AgentInstance)
         };
-        match service.operators.get(&operator) {
+        match service.operators.get_mut(&operator) {
             Some(v) => operator_data = v,
             None => {},
         }
@@ -501,27 +500,24 @@ impl ServiceRegistry {
         // Traverse agent instances and corresponding agent ids
         let mut total_bond = 0 as u128;
         for i in 0..agent_ids.len() {
-            let agent_id = agent_ids[i];
-            let agent_instance = agent_instances[i].clone();
-
             // Operator address must be different from agent instance one
-            require!(operator != agent_instance);
+            require!(operator != agent_instances[i]);
 
             // Check account validity
-            require!(env::is_valid_account_id(agent_instance.as_bytes()));
+            require!(env::is_valid_account_id(agent_instances[i].as_bytes()));
 
             // Check if there is an empty slot for the agent instance in this specific service
-            let mut agent_params = service.agent_params.get(&agent_id).unwrap();
+            let agent_params = service.agent_params.get_mut(&agent_ids[i]).unwrap();
             require!(agent_params.num_agent_instances > agent_params.instances.len() as u32);
 
             // Check that the agent instance address is unique across all services
-            let res = self.agent_instance_operators.insert(&agent_instance, &operator);
+            let res = self.agent_instance_operators.insert(agent_instances[i].clone(), operator.clone());
             require!(res.is_none());
 
             // Add agent instance into corresponding maps
-            agent_params.instances.push(&agent_instance);
-            operator_data.instances.push(&agent_instance);
-            service.agent_instances.insert(&agent_instance, &agent_id);
+            agent_params.instances.push(agent_instances[i].clone());
+            operator_data.instances.push(agent_instances[i].clone());
+            service.agent_instances.insert(agent_instances[i].clone(), agent_ids[i]);
 
             // Increase the total number of agent instances in a service
             service.num_agent_instances += 1;
@@ -569,12 +565,16 @@ impl ServiceRegistry {
         // Get all agent instances for the multisig
         let mut agent_instances = Vec::new();
         for a in service.agent_ids.iter() {
-            agent_instances.extend(service.agent_params.get(&a).unwrap().instances.iter());
+            let instances = &service.agent_params.get(a).unwrap().instances;
+            for i in instances.iter() {
+                agent_instances.push(i.clone());
+            }
+            //agent_instances.extend(service.agent_params.get(a).unwrap().instances.iter());
         }
 
         // Check if the multisig is not set => the service was never deployed
         // or if the multisig account does not the provided one => override current multisig with a new one
-        let multisig = service.multisig;
+        let multisig = &service.multisig;
         if multisig.is_none() || multisig.clone().unwrap() != name_multisig {
             // Create new multisig
             //log!("Calling external");
@@ -591,7 +591,7 @@ impl ServiceRegistry {
         } else {
             // Update multisig with the new owners set
             // Get multisig owners
-            multisig2::ext(multisig.unwrap().clone())
+            multisig2::ext(multisig.clone().unwrap().clone())
                 .with_static_gas(CALL_GAS)
                 .get_members()
                 // Compare multisig owners with the set of agent instances
@@ -606,7 +606,7 @@ impl ServiceRegistry {
 
     #[private] // Public - but only callable by env::current_account_id()
     pub fn create_multisig_callback(
-        &self,
+        &mut self,
         service_id: u32,
         name_multisig: AccountId,
         #[callback_result] call_result: Result<(), PromiseError>,
@@ -617,7 +617,7 @@ impl ServiceRegistry {
         }
 
         // Get the service, record its multisig and update state
-        let mut service = self.services.get(&service_id).unwrap();
+        let service = self.services.get_mut(&service_id).unwrap();
         service.multisig = Some(name_multisig);
         service.state = ServiceState::Deployed;
 
@@ -626,7 +626,7 @@ impl ServiceRegistry {
 
     #[private]
     pub fn update_multisig_callback(
-        &self,
+        &mut self,
         service_id: u32,
         agent_instances: Vec<AccountId>,
         #[callback_result] call_result: Result<Vec<AccountId>, PromiseError>,
@@ -637,7 +637,7 @@ impl ServiceRegistry {
         }
 
         // Get the service, record its multisig and update state
-        let mut service = self.services.get(&service_id).unwrap();
+        let service = self.services.get_mut(&service_id).unwrap();
 
         // Check agent instances vs multisig members
         let multisig_members = call_result.unwrap();
@@ -672,13 +672,13 @@ impl ServiceRegistry {
         let initial_storage_usage = env::storage_usage();
 
         // Get the service
-        let service = self.services.get(&service_id).unwrap();
+        let service = self.services.get_mut(&service_id).unwrap();
 
         // Check if the service is already terminated
         require!(service.state == ServiceState::Deployed);
 
         // Only the multisig of a correspondent address can slash its agent instances
-        require!(service.multisig.unwrap() == env::predecessor_account_id());
+        require!(service.multisig.clone().unwrap() == env::predecessor_account_id());
 
         // Traverse all agent instances
         for i in 0..agent_instances.len() {
@@ -687,7 +687,7 @@ impl ServiceRegistry {
 
             // Get the operator and its balance
             let operator = self.agent_instance_operators.get(&agent_instance).unwrap();
-            let mut operator_data = service.operators.get(&operator).unwrap();
+            let operator_data = service.operators.get_mut(operator).unwrap();
             let mut balance = operator_data.balance;
 
             // Slash the balance of the operator, make sure it does not go below zero
@@ -729,7 +729,7 @@ impl ServiceRegistry {
         let initial_storage_usage = env::storage_usage();
 
         // Get the service
-        let mut service = self.services.get(&service_id).unwrap();
+        let service = self.services.get_mut(&service_id).unwrap();
 
         // Check if the service is already terminated
         require!(service.state != ServiceState::PreRegistration && service.state != ServiceState::TerminatedBonded);
@@ -743,7 +743,7 @@ impl ServiceRegistry {
 
         // Remove agent instances data from agent params
         for a in service.agent_ids.iter() {
-            service.agent_params.get(&a).unwrap().instances.clear();
+            service.agent_params.get_mut(a).unwrap().instances.clear();
         }
 
         // TODO: Calculate refund of freed storage
@@ -753,7 +753,8 @@ impl ServiceRegistry {
         // TODO: This will mostly likely fail as the storage must decrease
         let storage = env::storage_usage() - initial_storage_usage;
         // Send the deposit back to the service owner
-        self.refund_deposit_to_account(storage, service.security_deposit, env::predecessor_account_id(), false);
+        let refund = service.security_deposit;
+        self.refund_deposit_to_account(storage, refund, env::predecessor_account_id(), false);
 
         // TODO: event
     }
@@ -767,7 +768,7 @@ impl ServiceRegistry {
         let initial_storage_usage = env::storage_usage();
 
         // Get the service
-        let mut service = self.services.get(&service_id).unwrap();
+        let service = self.services.get_mut(&service_id).unwrap();
 
         // Check the service state
         require!(service.state == ServiceState::TerminatedBonded);
@@ -788,15 +789,15 @@ impl ServiceRegistry {
         let mut refund = 0 as u128;
         for i in 0..operator_data.instances.len() {
             // Get agent id by the agent instance
-            let agent_id = service.agent_instances.get(&operator_data.instances.get(i).unwrap()).unwrap();
+            let agent_id = service.agent_instances.get(operator_data.instances.get(i).unwrap()).unwrap();
             // Get agent bond by agent id
             let bond = service.agent_params.get(&agent_id).unwrap().bond;
             // Add bond to the refund
             refund = refund.saturating_add(bond.into());
 
             // Remove the relevant data
-            self.agent_instance_operators.remove(&operator_data.instances.get(i).unwrap());
-            service.agent_instances.remove(&operator_data.instances.get(i).unwrap());
+            self.agent_instance_operators.remove(operator_data.instances.get(i).unwrap());
+            service.agent_instances.remove(operator_data.instances.get(i).unwrap());
         }
         // Check if the refund exceeds operator's balance
         // This situation is possible if the operator was slashed for the agent instance misbehavior
@@ -832,7 +833,7 @@ impl ServiceRegistry {
     }
 
     pub fn get_service_state(&self, service_id: u32) -> u8 {
-        self.services.get(&service_id).unwrap().state as u8
+        self.services.get(&service_id).unwrap().state.clone() as u8
     }
 
 //     pub fn get_service(&self, service_id: u32) -> Service {
