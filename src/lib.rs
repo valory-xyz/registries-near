@@ -574,17 +574,10 @@ impl ServiceRegistry {
             // Create new multisig
             //log!("Calling external");
             // Create a promise to call TestToken.is_paused()
-            let promise = Promise::new(MULTISIG_FACTORY.parse().unwrap())
-                .transfer(env::attached_deposit())
-                .function_call(
-                    "create".to_string(),
-                    json!({ "name": name_multisig.clone(), "members": agent_instances.clone(), "num_confirmations": service.threshold as u64 })
-                        .to_string()
-                        .as_bytes()
-                        .to_vec(),
-                    0,
-                    env::prepaid_gas() - Gas(CREATE_CALL_GAS),
-                )
+            let promise = multisig_factory::ext(MULTISIG_FACTORY.parse().unwrap())
+                .with_static_gas(Gas(5 * TGAS))
+                .with_attached_deposit(env::attached_deposit())
+                .create(name_multisig.clone(), agent_instances.clone(), service.threshold as u64)
                 .then(
                    // Create a promise to callback create_multisig_callback
                    Self::ext(env::current_account_id())
