@@ -4,13 +4,13 @@ use near_contract_standards::non_fungible_token::metadata::{
 use near_contract_standards::non_fungible_token::enumeration::NonFungibleTokenEnumeration;
 use near_contract_standards::non_fungible_token::{NonFungibleToken, Token};
 use near_sdk::borsh::{self, BorshDeserialize, BorshSerialize};
-use near_sdk::serde::{self, Serialize, Deserialize};
+// use near_sdk::serde::{Serialize, Deserialize};
 use near_sdk::json_types::{Base64VecU8, U128};
 use near_sdk::serde_json::json;
 use near_sdk::collections::LazyOption;
 use near_sdk::{
-    env, near_bindgen, require, AccountId, BorshStorageKey, PanicOnDefault, Promise, PromiseOrValue, StorageUsage, Gas,
-    PromiseError
+    env, near, require, AccountId, BorshStorageKey, PanicOnDefault, Promise, PromiseOrValue, StorageUsage, Gas,
+    IntoStorageKey, PromiseError, NearToken
 };
 use near_sdk::collections::{LookupMap, Vector};
 use near_sdk::ext_contract;
@@ -44,7 +44,8 @@ trait Multisig2 {
 }
 
 
-#[derive(BorshDeserialize, BorshSerialize, PartialEq)]
+#[near(serializers = [json, borsh])]
+#[derive(Clone, Debug, PartialEq, Eq)]
 pub enum ServiceState {
     NonExistent,
     PreRegistration,
@@ -55,8 +56,14 @@ pub enum ServiceState {
 }
 
 //#[near_bindgen]
-#[derive(BorshDeserialize, BorshSerialize, PanicOnDefault)]
-//#[near(serializers = [json, borsh])]
+//#[derive(BorshDeserialize, BorshSerialize, Serialize, Deserialize, PanicOnDefault)]
+// #[near(serializers = [json, borsh])]
+// #[derive(PartialEq, Eq)]
+// #[derive(Serialize, Deserialize)]
+// #[borsh(crate = "near_sdk::borsh")]
+#[near(serializers=[borsh])]
+//#[derive(BorshDeserialize, BorshSerialize, Serialize, Deserialize, PanicOnDefault)]
+// #[derive(PartialEq, Eq)]
 pub struct AgentParams {
     pub num_agent_instances: u32,
     pub bond: u128,
@@ -64,14 +71,22 @@ pub struct AgentParams {
 }
 
 //#[near_bindgen]
-#[derive(BorshDeserialize, BorshSerialize, PanicOnDefault)]
+//#[derive(BorshDeserialize, BorshSerialize, PanicOnDefault)]
+// #[derive(Serialize, Deserialize)]
+// #[borsh(crate = "near_sdk::borsh")]
+#[near(serializers = [borsh])]
+//#[derive(PartialEq, Eq)]
 pub struct OperatorData {
     pub balance: u128,
     pub instances: Vector<AccountId>
 }
 
 //#[near_bindgen]
-#[derive(BorshDeserialize, BorshSerialize, PanicOnDefault)]
+//#[derive(BorshDeserialize, BorshSerialize, PanicOnDefault)]
+#[near(serializers = [borsh])]
+//#[derive(Clone, Debug, PartialEq, Eq)]
+// #[derive(Serialize, Deserialize)]
+// #[borsh(crate = "near_sdk::borsh")]
 pub struct Service {
     // Service token
     pub token: Option<AccountId>,
@@ -102,25 +117,34 @@ pub struct Service {
     pub operators: LookupMap<AccountId, OperatorData>
 }
 
-const TGAS: u64 = 1_000_000_000_000;
-const CREATE_CALL_GAS: u64 = 50_000_000_000_000;
+const CALL_TGAS: Gas = Gas::from_tgas(5);
+const CREATE_CALL_GAS: Gas = Gas::from_tgas(50);
 
-#[near_bindgen]
-#[derive(BorshDeserialize, BorshSerialize, PanicOnDefault)]
+// #[near_bindgen]
+// #[derive(BorshDeserialize, BorshSerialize, PanicOnDefault)]
+#[near(contract_state)]
+#[derive(Default)]
 pub struct ServiceRegistry {
-    owner: AccountId,
-    services: LookupMap<u32, Service>,
-    tokens: NonFungibleToken,
-    metadata: LazyOption<NFTContractMetadata>,
-    agent_instance_operators: LookupMap<AccountId, AccountId>,
+    owner: Option<AccountId>,
+    services: Option<LookupMap<u32, Service>>,
+    tokens: Option<NonFungibleToken>,
+    metadata: Option<LazyOption<NFTContractMetadata>>,
+    agent_instance_operators: Option<LookupMap<AccountId, AccountId>>,
     slashed_funds: u128,
     paused: bool,
-    multisig_factory: AccountId
+    multisig_factory: Option<AccountId>
 }
 
 const DATA_IMAGE_SVG_NEAR_ICON: &str = "data:image/svg+xml,%3Csvg xmlns='http://www.w3.org/2000/svg' viewBox='0 0 288 288'%3E%3Cg id='l' data-name='l'%3E%3Cpath d='M187.58,79.81l-30.1,44.69a3.2,3.2,0,0,0,4.75,4.2L191.86,103a1.2,1.2,0,0,1,2,.91v80.46a1.2,1.2,0,0,1-2.12.77L102.18,77.93A15.35,15.35,0,0,0,90.47,72.5H87.34A15.34,15.34,0,0,0,72,87.84V201.16A15.34,15.34,0,0,0,87.34,216.5h0a15.35,15.35,0,0,0,13.08-7.31l30.1-44.69a3.2,3.2,0,0,0-4.75-4.2L96.14,186a1.2,1.2,0,0,1-2-.91V104.61a1.2,1.2,0,0,1,2.12-.77l89.55,107.23a15.35,15.35,0,0,0,11.71,5.43h3.13A15.34,15.34,0,0,0,216,201.16V87.84A15.34,15.34,0,0,0,200.66,72.5h0A15.35,15.35,0,0,0,187.58,79.81Z'/%3E%3C/g%3E%3C/svg%3E";
 
-#[derive(BorshSerialize, BorshStorageKey)]
+// #[derive(BorshStorageKey, BorshSerialize)]
+// #[borsh(crate = "near_sdk::borsh")]
+// #[near(serializers = [json, borsh])]
+// #[derive(Clone, Debug, PartialEq, Eq)]
+//#[near(serializers = [borsh])]
+// #[derive(BorshStorageKey, BorshSerialize)]
+#[derive(BorshStorageKey, BorshSerialize)]
+#[borsh(crate = "near_sdk::borsh")]
 enum StorageKey {
     NonFungibleToken,
     Metadata,
@@ -137,7 +161,7 @@ enum StorageKey {
     AgentInstanceOperator
 }
 
-#[near_bindgen]
+#[near]
 impl ServiceRegistry {
     /// Initializes the contract owned by `owner_id` with
     /// default metadata (for example purposes only).
@@ -163,49 +187,50 @@ impl ServiceRegistry {
         assert!(!env::state_exists(), "Already initialized");
         metadata.assert_valid();
         Self {
-            owner: env::predecessor_account_id(),
-            services: LookupMap::new(StorageKey::Service),
-            tokens: NonFungibleToken::new(
+            owner: Some(env::predecessor_account_id()),
+            services: Some(LookupMap::new(StorageKey::Service)),
+            tokens: Some(NonFungibleToken::new(
                 StorageKey::NonFungibleToken,
                 owner_id,
                 Some(StorageKey::TokenMetadata),
                 Some(StorageKey::Enumeration),
                 Some(StorageKey::Approval),
-            ),
-            metadata: LazyOption::new(StorageKey::Metadata, Some(&metadata)),
-            agent_instance_operators: LookupMap::new(StorageKey::AgentInstanceOperator),
+            )),
+            metadata: Some(LazyOption::new(StorageKey::Metadata, Some(&metadata))),
+            agent_instance_operators: Some(LookupMap::new(StorageKey::AgentInstanceOperator)),
             slashed_funds: 0 as u128,
             paused: false,
-            multisig_factory
+            multisig_factory: Some(multisig_factory)
         }
     }
 
     fn refund_deposit_to_account(&self, storage_used: u64, deposit_used: u128, account_id: AccountId, deposit_in: bool) {
-        let mut refund: u128 = 0;
+        let mut refund: NearToken = NearToken::from_yoctonear(0);
+        let near_deposit = NearToken::from_yoctonear(deposit_used);
         let mut required_cost = env::storage_byte_cost().saturating_mul(storage_used.into());
         if deposit_in {
-            required_cost = required_cost.saturating_add(deposit_used.into());
+            required_cost = required_cost.saturating_add(near_deposit);
         } else {
-            refund = refund.saturating_add(deposit_used.into());
+            refund = refund.saturating_add(near_deposit);
         }
         let attached_deposit = env::attached_deposit();
 
         require!(required_cost <= attached_deposit);
 
-        refund += attached_deposit.saturating_sub(required_cost);
-        if refund > 1 {
+        refund = refund.saturating_add(attached_deposit).saturating_sub(required_cost);
+        if refund.as_yoctonear() > 1 {
             Promise::new(account_id).transfer(refund);
         }
     }
 
     pub fn change_owner(&mut self, new_owner: AccountId) {
         // Check the ownership
-        require!(self.owner == env::predecessor_account_id());
+        require!(self.owner.clone().unwrap() == env::predecessor_account_id());
 
         // Check account validity
-        require!(env::is_valid_account_id(new_owner.as_ref().as_bytes()));
+        require!(env::is_valid_account_id(new_owner.as_bytes()));
 
-        self.owner = new_owner;
+        self.owner = Some(new_owner);
 
         // TODO: event
     }
@@ -245,7 +270,7 @@ impl ServiceRegistry {
         threshold: u32
     ) {
         // Get the service
-        let mut service = self.services.get(&service_id).unwrap();
+        let mut service = self.services.as_mut().unwrap().get(&service_id).unwrap();
 
         // Check the service state
         require!(service.state == ServiceState::PreRegistration);
@@ -327,8 +352,6 @@ impl ServiceRegistry {
         // Record current storage usage
         let initial_storage_usage = env::storage_usage();
 
-        let config_hash: [u8; 32] = [42; 32];
-
         // TODO Check other fields?
         // Number of copies must be equal to one
         require!(metadata.copies.unwrap() == 1);
@@ -341,16 +364,16 @@ impl ServiceRegistry {
         );
 
         // Get the current total supply
-        let supply = self.tokens.owner_by_id.len() as u32;
+        let supply = self.tokens.as_mut().unwrap().owner_by_id.len() as u32;
         // To be consistent with EVM where Ids start from 1, each new token Id is equal to supply + 1
         let service_id = supply + 1;
 
         // Mint new service
         // This function is used such that the storage calculation is not engaged and deposit is not refunded
-        self.tokens.internal_mint_with_refund(service_id.to_string().clone(), service_owner, Some(metadata), None);
+        self.tokens.as_mut().unwrap().internal_mint_with_refund(service_id.to_string().clone(), service_owner, Some(metadata), None);
 
         // Allocate the service
-        self.services.insert(
+        self.services.as_mut().unwrap().insert(
             &service_id,
             &Service {
                 // TODO: change with just token when other tokens are enabled
@@ -405,6 +428,8 @@ impl ServiceRegistry {
 
         // Check for service owner
         let owner_id = self.tokens
+            .as_mut()
+            .unwrap()
             .owner_by_id
             .get(&service_id.to_string())
             .unwrap_or_else(|| env::panic_str("Service not found"));
@@ -443,6 +468,8 @@ impl ServiceRegistry {
     ) {
         // Check for service owner
         let owner_id = self.tokens
+            .as_mut()
+            .unwrap()
             .owner_by_id
             .get(&service_id.to_string())
             .unwrap_or_else(|| env::panic_str("Service not found"));
@@ -452,7 +479,7 @@ impl ServiceRegistry {
         let initial_storage_usage = env::storage_usage();
 
         // Get the service
-        let mut service = self.services.get(&service_id).unwrap();
+        let mut service = self.services.as_mut().unwrap().get(&service_id).unwrap();
 
         // Check the service state
         require!(service.state == ServiceState::PreRegistration);
@@ -484,7 +511,7 @@ impl ServiceRegistry {
 
         // Get the service
         // TODO Check if service id exists?
-        let mut service = self.services.get(&service_id).unwrap();
+        let mut service = self.services.as_mut().unwrap().get(&service_id).unwrap();
 
         // Check the service state
         require!(service.state == ServiceState::ActiveRegistration);
@@ -509,14 +536,14 @@ impl ServiceRegistry {
             require!(operator != agent_instance);
 
             // Check account validity
-            require!(env::is_valid_account_id(agent_instance.as_ref().as_bytes()));
+            require!(env::is_valid_account_id(agent_instance.as_bytes()));
 
             // Check if there is an empty slot for the agent instance in this specific service
             let mut agent_params = service.agent_params.get(&agent_id).unwrap();
             require!(agent_params.num_agent_instances > agent_params.instances.len() as u32);
 
             // Check that the agent instance address is unique across all services
-            let res = self.agent_instance_operators.insert(&agent_instance, &operator);
+            let res = self.agent_instance_operators.as_mut().unwrap().insert(&agent_instance, &operator);
             require!(res.is_none());
 
             // Add agent instance into corresponding maps
@@ -556,13 +583,15 @@ impl ServiceRegistry {
     ) {
         // Check for service owner
         let owner_id = self.tokens
+            .as_mut()
+            .unwrap()
             .owner_by_id
             .get(&service_id.to_string())
             .unwrap_or_else(|| env::panic_str("Service not found"));
         require!(env::predecessor_account_id() == owner_id, "Predecessor must be token owner.");
 
         // Get the service
-        let service = self.services.get(&service_id).unwrap();
+        let service = self.services.as_mut().unwrap().get(&service_id).unwrap();
 
         // Check if the service is already terminated
         require!(service.state == ServiceState::FinishedRegistration);
@@ -579,28 +608,27 @@ impl ServiceRegistry {
         if multisig.is_none() || multisig.clone().unwrap() != name_multisig {
             // Create new multisig
             //log!("Calling external");
-            // Create a promise to call TestToken.is_paused()
-            let promise = multisig_factory::ext(self.multisig_factory.clone())
-                .with_static_gas(Gas(CREATE_CALL_GAS))
+            multisig_factory::ext(self.multisig_factory.as_mut().unwrap().clone())
+                .with_static_gas(CREATE_CALL_GAS)
                 .with_attached_deposit(env::attached_deposit())
                 .create(name_multisig.clone(), agent_instances.clone(), service.threshold as u64)
                 .then(
                    // Create a promise to callback create_multisig_callback
                    Self::ext(env::current_account_id())
-                       .with_static_gas(Gas(5 * TGAS))
+                       .with_static_gas(CALL_TGAS)
                        .create_multisig_callback(service_id, name_multisig.clone())
                 );
         } else {
             // Update multisig with the new owners set
             // Get multisig owners
             multisig2::ext(multisig.unwrap().clone())
-                .with_static_gas(Gas(5 * TGAS))
+                .with_static_gas(CALL_TGAS)
                 .get_members()
                 // Compare multisig owners with the set of agent instances
                 .then(
                    // Create a promise to callback update_multisig_callback
                    Self::ext(env::current_account_id())
-                       .with_static_gas(Gas(5 * TGAS))
+                       .with_static_gas(CALL_TGAS)
                        .update_multisig_callback(service_id, agent_instances.clone())
                 );
         }
@@ -619,7 +647,7 @@ impl ServiceRegistry {
         }
 
         // Get the service, record its multisig and update state
-        let mut service = self.services.get(&service_id).unwrap();
+        let mut service = self.services.as_mut().unwrap().get(&service_id).unwrap();
         service.multisig = Some(name_multisig);
         service.state = ServiceState::Deployed;
 
@@ -639,7 +667,7 @@ impl ServiceRegistry {
         }
 
         // Get the service, record its multisig and update state
-        let mut service = self.services.get(&service_id).unwrap();
+        let mut service = self.services.as_mut().unwrap().get(&service_id).unwrap();
 
         // Check agent instances vs multisig members
         let multisig_members = call_result.unwrap();
@@ -674,7 +702,7 @@ impl ServiceRegistry {
         let initial_storage_usage = env::storage_usage();
 
         // Get the service
-        let service = self.services.get(&service_id).unwrap();
+        let service = self.services.as_mut().unwrap().get(&service_id).unwrap();
 
         // Check if the service is already terminated
         require!(service.state == ServiceState::Deployed);
@@ -688,7 +716,7 @@ impl ServiceRegistry {
             let agent_instance = agent_instances[i].clone();
 
             // Get the operator and its balance
-            let operator = self.agent_instance_operators.get(&agent_instance).unwrap();
+            let operator = self.agent_instance_operators.as_mut().unwrap().get(&agent_instance).unwrap();
             let mut operator_data = service.operators.get(&operator).unwrap();
             let mut balance = operator_data.balance;
 
@@ -722,6 +750,8 @@ impl ServiceRegistry {
     ) {
         // Check for service owner
         let owner_id = self.tokens
+            .as_mut()
+            .unwrap()
             .owner_by_id
             .get(&service_id.to_string())
             .unwrap_or_else(|| env::panic_str("Service not found"));
@@ -731,7 +761,7 @@ impl ServiceRegistry {
         let initial_storage_usage = env::storage_usage();
 
         // Get the service
-        let mut service = self.services.get(&service_id).unwrap();
+        let mut service = self.services.as_mut().unwrap().get(&service_id).unwrap();
 
         // Check if the service is already terminated
         require!(service.state != ServiceState::PreRegistration && service.state != ServiceState::TerminatedBonded);
@@ -747,7 +777,7 @@ impl ServiceRegistry {
         for a in service.agent_ids.iter() {
             service.agent_params.get(&a).unwrap().instances.clear();
         }
-        
+
         // TODO: Calculate refund of freed storage
 
         // Increased storage
@@ -769,7 +799,7 @@ impl ServiceRegistry {
         let initial_storage_usage = env::storage_usage();
 
         // Get the service
-        let mut service = self.services.get(&service_id).unwrap();
+        let mut service = self.services.as_mut().unwrap().get(&service_id).unwrap();
 
         // Check the service state
         require!(service.state == ServiceState::TerminatedBonded);
@@ -797,7 +827,7 @@ impl ServiceRegistry {
             refund = refund.saturating_add(bond.into());
 
             // Remove the relevant data
-            self.agent_instance_operators.remove(&operator_data.instances.get(i).unwrap());
+            self.agent_instance_operators.as_mut().unwrap().remove(&operator_data.instances.get(i).unwrap());
             service.agent_instances.remove(&operator_data.instances.get(i).unwrap());
         }
         // Check if the refund exceeds operator's balance
@@ -821,31 +851,31 @@ impl ServiceRegistry {
     // TODO Shall this be payable as 1 yocto is needed for?
     pub fn drain(&mut self) {
         // Check the ownership
-        require!(self.owner == env::predecessor_account_id());
+        require!(self.owner.as_mut().unwrap() == env::predecessor_account_id());
 
         let amount = self.slashed_funds;
         // TODO: 1 or 0 here?
         if amount > 1 {
             self.slashed_funds = 0;
-            Promise::new(env::predecessor_account_id()).transfer(amount);
+            Promise::new(env::predecessor_account_id()).transfer(NearToken::from_yoctonear(amount));
         }
 
         // TODO: event
     }
 
     pub fn get_service_state(&self, service_id: u32) -> u8 {
-        self.services.get(&service_id).unwrap().state as u8
+        self.services.unwrap().get(&service_id).unwrap().state as u8
     }
 
 //     pub fn get_service(&self, service_id: u32) -> Service {
-//         self.services.get(&service_id).unwrap_or_default()
+//         self.services.unwrap().get(&service_id).unwrap_or_default()
 //     }
 
 //     pub fn get_agent_params(&self, service_id: u32) -> AgentParams {
 //         //let mut agent_params = Vec::new();
 //
 //         // Get the service
-//         let service = self.services.get(&service_id).unwrap_or_default();//unwrap_or_else(|| env::panic_str("Service not found"));
+//         let service = self.services.unwrap().get(&service_id).unwrap_or_default();//unwrap_or_else(|| env::panic_str("Service not found"));
 //         let agent_params = service.agent_params.get(&service_id).unwrap_or_default();
 //         agent_params
 //     }
@@ -883,13 +913,13 @@ impl ServiceRegistry {
 //     }
 
     pub fn account_storage_usage(&self) -> StorageUsage {
-        self.tokens.extra_storage_in_bytes_per_token
+        self.tokens.unwrap().extra_storage_in_bytes_per_token
     }
 
     /// Return true if the caller is either controller or self
     pub fn owner_or_self(&self) -> bool {
         let caller = env::predecessor_account_id();
-        caller == self.tokens.owner_id || caller == env::current_account_id()
+        caller == self.tokens.unwrap().owner_id || caller == env::current_account_id()
     }
 
     pub fn is_paused(&self) -> bool {
@@ -902,11 +932,11 @@ impl ServiceRegistry {
     }
 
     pub fn total_supply(&self) -> U128 {
-        self.tokens.nft_total_supply()
+        self.tokens.unwrap().nft_total_supply()
     }
 
     pub fn get_token_metadata(&self, service_id: u32) -> Option<TokenMetadata> {
-        self.tokens.token_metadata_by_id.as_ref().and_then(|by_id| by_id.get(&service_id.to_string()))
+        self.tokens.unwrap().token_metadata_by_id.as_ref().and_then(|by_id| by_id.get(&service_id.to_string()))
     }
 
     pub fn version(&self) -> String {
