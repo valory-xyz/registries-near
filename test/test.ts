@@ -16,6 +16,13 @@ const defaultMetadata = {
     reference_hash: "",
 }
 
+const configHash = Array(32).fill(5);
+const agentIds = [1];
+const agentNumInstances = [1];
+const agentBonds = [1];
+const threshold = 1;
+
+
 const test = anyTest as TestFn<{
   worker: Worker;
   accounts: Record<string, NearAccount>;
@@ -29,7 +36,7 @@ test.beforeEach(async t => {
   const root = worker.rootAccount;
   const contract = await root.devDeploy(
     "target/wasm32-unknown-unknown/release/registries_near.wasm",
-    {initialBalance: NEAR.parse("3 N").toJSON()},
+    {initialBalance: NEAR.parse("10 N").toJSON()},
   );
   const deployer = await root.createSubAccount("deployer", {initialBalance: NEAR.parse("3 N").toJSON()});
 
@@ -44,20 +51,30 @@ test.afterEach.always(async t => {
   });
 });
 
-test("Check contract state", async t => {
+test("Create service and check its state", async t => {
   const {root, contract, deployer} = t.context.accounts;
-//  console.log("root:", root);
-//  console.log("contract:", contract);
-  await root.call(contract, "new_default_meta", {owner_id: deployer});
-//  await contract.view("is_paused");
-  let result = await contract.view("is_paused", {});
-  t.is(result, false);
 
-  const attachedDeposit = "1 N";
-  await root.call(contract, "create", {service_owner: deployer, metadata: defaultMetadata}, {attachedDeposit});
+  // Initialize the contract
+  await root.call(contract, "new_default_meta", {
+    owner_id: deployer,
+    multisig_factory: deployer
+  });
+
+  // Create service
+  const attachedDeposit = "5 N";
+  await root.call(contract, "create", {
+    service_owner: deployer,
+    metadata: defaultMetadata,
+    token: deployer,
+    config_hash: configHash,
+    agent_ids: agentIds,
+    agent_num_instances: agentNumInstances,
+    agent_bonds: agentBonds,
+    threshold
+  }, {attachedDeposit});
   result = await contract.view("total_supply", {});
   console.log(result);
 
-  result = await contract.view("get_token_metadata", {token_id: "1"});
+  result = await contract.view("get_service_state", {service_id: 1});
   console.log(result);
 });
