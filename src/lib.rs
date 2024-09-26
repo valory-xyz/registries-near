@@ -4,13 +4,13 @@ use near_contract_standards::non_fungible_token::metadata::{
 use near_contract_standards::non_fungible_token::enumeration::NonFungibleTokenEnumeration;
 use near_contract_standards::non_fungible_token::{NonFungibleToken, Token};
 use near_sdk::borsh::{self, BorshDeserialize, BorshSerialize};
-use near_sdk::serde::{self, Serialize, Deserialize};
+// use near_sdk::serde::{Serialize, Deserialize};
 use near_sdk::json_types::{Base64VecU8, U128};
 use near_sdk::serde_json::json;
 use near_sdk::collections::LazyOption;
 use near_sdk::{
-    env, near_bindgen, require, AccountId, BorshStorageKey, PanicOnDefault, Promise, PromiseOrValue, StorageUsage, Gas,
-    PromiseError
+    env, near, require, AccountId, BorshStorageKey, PanicOnDefault, Promise, PromiseOrValue, StorageUsage, Gas,
+    IntoStorageKey, PromiseError, NearToken
 };
 use near_sdk::collections::{LookupMap, Vector};
 use near_sdk::ext_contract;
@@ -44,7 +44,8 @@ trait Multisig2 {
 }
 
 
-#[derive(BorshDeserialize, BorshSerialize, PartialEq)]
+#[near(serializers=[borsh])]
+#[derive(PartialEq)]
 pub enum ServiceState {
     NonExistent,
     PreRegistration,
@@ -54,24 +55,20 @@ pub enum ServiceState {
     TerminatedBonded
 }
 
-//#[near_bindgen]
-#[derive(BorshDeserialize, BorshSerialize, PanicOnDefault)]
-//#[near(serializers = [json, borsh])]
+#[near(serializers=[borsh])]
 pub struct AgentParams {
     pub num_agent_instances: u32,
     pub bond: u128,
     pub instances: Vector<AccountId>
 }
 
-//#[near_bindgen]
-#[derive(BorshDeserialize, BorshSerialize, PanicOnDefault)]
+#[near(serializers=[borsh])]
 pub struct OperatorData {
     pub balance: u128,
     pub instances: Vector<AccountId>
 }
 
-//#[near_bindgen]
-#[derive(BorshDeserialize, BorshSerialize, PanicOnDefault)]
+#[near(serializers=[borsh])]
 pub struct Service {
     // Service token
     pub token: Option<AccountId>,
@@ -102,11 +99,11 @@ pub struct Service {
     pub operators: LookupMap<AccountId, OperatorData>
 }
 
-const TGAS: u64 = 1_000_000_000_000;
-const CREATE_CALL_GAS: u64 = 50_000_000_000_000;
+const CALL_GAS: Gas = Gas::from_tgas(5);
+const CREATE_CALL_GAS: Gas = Gas::from_tgas(50);
 
-#[near_bindgen]
-#[derive(BorshDeserialize, BorshSerialize, PanicOnDefault)]
+#[near(contract_state)]
+// #[derive(Default)]
 pub struct ServiceRegistry {
     owner: AccountId,
     services: LookupMap<u32, Service>,
@@ -120,7 +117,8 @@ pub struct ServiceRegistry {
 
 const DATA_IMAGE_SVG_NEAR_ICON: &str = "data:image/svg+xml,%3Csvg xmlns='http://www.w3.org/2000/svg' viewBox='0 0 288 288'%3E%3Cg id='l' data-name='l'%3E%3Cpath d='M187.58,79.81l-30.1,44.69a3.2,3.2,0,0,0,4.75,4.2L191.86,103a1.2,1.2,0,0,1,2,.91v80.46a1.2,1.2,0,0,1-2.12.77L102.18,77.93A15.35,15.35,0,0,0,90.47,72.5H87.34A15.34,15.34,0,0,0,72,87.84V201.16A15.34,15.34,0,0,0,87.34,216.5h0a15.35,15.35,0,0,0,13.08-7.31l30.1-44.69a3.2,3.2,0,0,0-4.75-4.2L96.14,186a1.2,1.2,0,0,1-2-.91V104.61a1.2,1.2,0,0,1,2.12-.77l89.55,107.23a15.35,15.35,0,0,0,11.71,5.43h3.13A15.34,15.34,0,0,0,216,201.16V87.84A15.34,15.34,0,0,0,200.66,72.5h0A15.35,15.35,0,0,0,187.58,79.81Z'/%3E%3C/g%3E%3C/svg%3E";
 
-#[derive(BorshSerialize, BorshStorageKey)]
+#[derive(BorshStorageKey, BorshSerialize)]
+#[borsh(crate = "near_sdk::borsh")]
 enum StorageKey {
     NonFungibleToken,
     Metadata,
@@ -137,7 +135,7 @@ enum StorageKey {
     AgentInstanceOperator
 }
 
-#[near_bindgen]
+#[near]
 impl ServiceRegistry {
     /// Initializes the contract owned by `owner_id` with
     /// default metadata (for example purposes only).
@@ -181,19 +179,20 @@ impl ServiceRegistry {
     }
 
     fn refund_deposit_to_account(&self, storage_used: u64, deposit_used: u128, account_id: AccountId, deposit_in: bool) {
-        let mut refund: u128 = 0;
+        let mut refund: NearToken = NearToken::from_yoctonear(0);
+        let near_deposit = NearToken::from_yoctonear(deposit_used);
         let mut required_cost = env::storage_byte_cost().saturating_mul(storage_used.into());
         if deposit_in {
-            required_cost = required_cost.saturating_add(deposit_used.into());
+            required_cost = required_cost.saturating_add(near_deposit);
         } else {
-            refund = refund.saturating_add(deposit_used.into());
+            refund = refund.saturating_add(near_deposit);
         }
         let attached_deposit = env::attached_deposit();
 
         require!(required_cost <= attached_deposit);
 
-        refund += attached_deposit.saturating_sub(required_cost);
-        if refund > 1 {
+        refund = refund.saturating_add(attached_deposit).saturating_sub(required_cost);
+        if refund.as_yoctonear() > 1 {
             Promise::new(account_id).transfer(refund);
         }
     }
@@ -203,7 +202,7 @@ impl ServiceRegistry {
         require!(self.owner == env::predecessor_account_id());
 
         // Check account validity
-        require!(env::is_valid_account_id(new_owner.as_ref().as_bytes()));
+        require!(env::is_valid_account_id(new_owner.as_bytes()));
 
         self.owner = new_owner;
 
@@ -509,7 +508,7 @@ impl ServiceRegistry {
             require!(operator != agent_instance);
 
             // Check account validity
-            require!(env::is_valid_account_id(agent_instance.as_ref().as_bytes()));
+            require!(env::is_valid_account_id(agent_instance.as_bytes()));
 
             // Check if there is an empty slot for the agent instance in this specific service
             let mut agent_params = service.agent_params.get(&agent_id).unwrap();
@@ -579,28 +578,27 @@ impl ServiceRegistry {
         if multisig.is_none() || multisig.clone().unwrap() != name_multisig {
             // Create new multisig
             //log!("Calling external");
-            // Create a promise to call TestToken.is_paused()
-            let promise = multisig_factory::ext(self.multisig_factory.clone())
-                .with_static_gas(Gas(CREATE_CALL_GAS))
+            multisig_factory::ext(self.multisig_factory.clone())
+                .with_static_gas(CREATE_CALL_GAS)
                 .with_attached_deposit(env::attached_deposit())
                 .create(name_multisig.clone(), agent_instances.clone(), service.threshold as u64)
                 .then(
                    // Create a promise to callback create_multisig_callback
                    Self::ext(env::current_account_id())
-                       .with_static_gas(Gas(5 * TGAS))
+                       .with_static_gas(CALL_GAS)
                        .create_multisig_callback(service_id, name_multisig.clone())
                 );
         } else {
             // Update multisig with the new owners set
             // Get multisig owners
             multisig2::ext(multisig.unwrap().clone())
-                .with_static_gas(Gas(5 * TGAS))
+                .with_static_gas(CALL_GAS)
                 .get_members()
                 // Compare multisig owners with the set of agent instances
                 .then(
                    // Create a promise to callback update_multisig_callback
                    Self::ext(env::current_account_id())
-                       .with_static_gas(Gas(5 * TGAS))
+                       .with_static_gas(CALL_GAS)
                        .update_multisig_callback(service_id, agent_instances.clone())
                 );
         }
@@ -747,7 +745,7 @@ impl ServiceRegistry {
         for a in service.agent_ids.iter() {
             service.agent_params.get(&a).unwrap().instances.clear();
         }
-        
+
         // TODO: Calculate refund of freed storage
 
         // Increased storage
@@ -827,7 +825,7 @@ impl ServiceRegistry {
         // TODO: 1 or 0 here?
         if amount > 1 {
             self.slashed_funds = 0;
-            Promise::new(env::predecessor_account_id()).transfer(amount);
+            Promise::new(env::predecessor_account_id()).transfer(NearToken::from_yoctonear(amount));
         }
 
         // TODO: event
@@ -838,7 +836,7 @@ impl ServiceRegistry {
     }
 
 //     pub fn get_service(&self, service_id: u32) -> Service {
-//         self.services.get(&service_id).unwrap_or_default()
+//         self.services.get(&service_id).unwrap()
 //     }
 
 //     pub fn get_agent_params(&self, service_id: u32) -> AgentParams {
@@ -911,6 +909,43 @@ impl ServiceRegistry {
 
     pub fn version(&self) -> String {
         env!("CARGO_PKG_VERSION").to_owned()
+    }
+}
+
+// impl Default for AccountId {
+//     fn default() -> Self {
+//         Self {
+//             account_id: "aaa";
+//         }
+//     }
+// }
+//
+impl Default for ServiceRegistry {
+    fn default() -> Self {
+        Self {
+            owner: "".parse().unwrap(),
+            services: LookupMap::new(StorageKey::Service),
+            tokens: NonFungibleToken::new(
+                StorageKey::NonFungibleToken,
+                "".parse().unwrap(),
+                Some(StorageKey::TokenMetadata),
+                Some(StorageKey::Enumeration),
+                Some(StorageKey::Approval),
+            ),
+            metadata: LazyOption::new(StorageKey::Metadata, Some(&NFTContractMetadata {
+                                                                                 spec: Default::default(),
+                                                                                 name: Default::default(),
+                                                                                 symbol: Default::default(),
+                                                                                 icon: None,
+                                                                                 base_uri: None,
+                                                                                 reference: None,
+                                                                                 reference_hash: None,
+                                                                             },)),
+            agent_instance_operators: LookupMap::new(StorageKey::AgentInstanceOperator),
+            slashed_funds: Default::default(),
+            paused: Default::default(),
+            multisig_factory: "".parse().unwrap()
+        }
     }
 }
 

@@ -72,7 +72,7 @@ test("Create service and check its state", async t => {
     agent_bonds: agentBonds,
     threshold
   }, {attachedDeposit});
-  result = await contract.view("total_supply", {});
+  let result = await contract.view("total_supply", {});
   console.log(result);
 
   result = await contract.view("get_service_state", {service_id: 1});
