@@ -109,9 +109,10 @@ pub struct ServiceRegistry {
     tokens: NonFungibleToken,
     metadata: LazyOption<NFTContractMetadata>,
     agent_instance_operators: LookupMap<AccountId, AccountId>,
-    slashed_funds: u128,
     paused: bool,
-    multisig_factory: AccountId
+    multisig_factory: AccountId,
+    balance: u128,
+    slashed_funds: u128
 }
 
 const DATA_IMAGE_SVG_NEAR_ICON: &str = "data:image/svg+xml,%3Csvg xmlns='http://www.w3.org/2000/svg' viewBox='0 0 288 288'%3E%3Cg id='l' data-name='l'%3E%3Cpath d='M187.58,79.81l-30.1,44.69a3.2,3.2,0,0,0,4.75,4.2L191.86,103a1.2,1.2,0,0,1,2,.91v80.46a1.2,1.2,0,0,1-2.12.77L102.18,77.93A15.35,15.35,0,0,0,90.47,72.5H87.34A15.34,15.34,0,0,0,72,87.84V201.16A15.34,15.34,0,0,0,87.34,216.5h0a15.35,15.35,0,0,0,13.08-7.31l30.1-44.69a3.2,3.2,0,0,0-4.75-4.2L96.14,186a1.2,1.2,0,0,1-2-.91V104.61a1.2,1.2,0,0,1,2.12-.77l89.55,107.23a15.35,15.35,0,0,0,11.71,5.43h3.13A15.34,15.34,0,0,0,216,201.16V87.84A15.34,15.34,0,0,0,200.66,72.5h0A15.35,15.35,0,0,0,187.58,79.81Z'/%3E%3C/g%3E%3C/svg%3E";
@@ -171,9 +172,10 @@ impl ServiceRegistry {
             ),
             metadata: LazyOption::new(StorageKey::Metadata, Some(&metadata)),
             agent_instance_operators: LookupMap::new(StorageKey::AgentInstanceOperator),
-            slashed_funds: 0 as u128,
             paused: false,
-            multisig_factory
+            multisig_factory,
+            balance: 0 as u128,
+            slashed_funds: 0 as u128
         }
     }
 
@@ -408,7 +410,7 @@ impl ServiceRegistry {
 
         // Check that all current agent ids are updated / removed to correspond the CRUD way
         let service = self.services.get(&service_id).unwrap();
-        require!(service.agent_ids.iter().all(|ai| agent_ids.contains(ai)));
+        require!(service.agent_ids.iter().all(|ai| agent_ids.contains(ai)), "Not all agent Ids are updated");
 
         self.check_service_params(
             config_hash,
@@ -455,12 +457,16 @@ impl ServiceRegistry {
         // Check the service state
         require!(service.state == ServiceState::PreRegistration);
 
+        // Update service state
         service.state = ServiceState::ActiveRegistration;
+
+        // Update registry balance
+        let deposit = service.security_deposit;
+        self.balance = self.balance.saturating_add(deposit.into());
 
         // Increased storage
         // TODO: check if this is zero, as no storage is supposedly increased
         let storage = env::storage_usage() - initial_storage_usage;
-        let deposit = service.security_deposit;
         self.refund_deposit_to_account(storage, deposit, env::predecessor_account_id(), true);
 
         // TODO: event
@@ -489,15 +495,15 @@ impl ServiceRegistry {
         require!(service.state == ServiceState::ActiveRegistration);
 
         // Initialize or get operator struct
-        // TODO find alternative solution?
-        let mut operator_data = &mut OperatorData{
-            balance: 0 as u128,
-            instances: Vector::new(StorageKey::AgentInstance)
-        };
-        match service.operators.get_mut(&operator) {
-            Some(v) => operator_data = v,
-            None => {},
-        }
+        let operator_data = service
+            .operators
+            // Get operator struct
+            .entry(operator.clone())
+            // or create a new one if not
+            .or_insert(OperatorData{
+                balance: 0 as u128,
+                instances: Vector::new(StorageKey::AgentInstance)
+            });
 
         // Traverse agent instances and corresponding agent ids
         let mut total_bond = 0 as u128;
@@ -535,6 +541,7 @@ impl ServiceRegistry {
 
         // Update operator struct
         operator_data.balance = operator_data.balance.saturating_add(total_bond.into());
+        self.balance = self.balance.saturating_add(total_bond.into());
 
         // Increased storage
         let storage = env::storage_usage() - initial_storage_usage;
@@ -744,6 +751,10 @@ impl ServiceRegistry {
             service.agent_params.get_mut(a).unwrap().instances.clear();
         }
 
+        // Update registry balance
+        let refund = service.security_deposit;
+        self.balance = self.balance.saturating_sub(refund.into());
+
         // TODO: Calculate refund of freed storage
 
         // Increased storage
@@ -751,7 +762,6 @@ impl ServiceRegistry {
         // TODO: This will mostly likely fail as the storage must decrease
         let storage = env::storage_usage() - initial_storage_usage;
         // Send the deposit back to the service owner
-        let refund = service.security_deposit;
         self.refund_deposit_to_account(storage, refund, env::predecessor_account_id(), false);
 
         // TODO: event
@@ -806,6 +816,9 @@ impl ServiceRegistry {
         // Remove the operator data from current service
         service.operators.remove(&operator);
 
+        // Update registry balance
+        self.balance = self.balance.saturating_sub(refund.into());
+
         // Increased storage
         // TODO: need to correctly recalculate the storage decrease
         let storage = env::storage_usage() - initial_storage_usage;
@@ -830,6 +843,7 @@ impl ServiceRegistry {
         // TODO: event
     }
 
+    // TODO: unwrap or else or default panic message is ok?
     pub fn get_service_state(&self, service_id: u32) -> u8 {
         self.services.get(&service_id).unwrap().state.clone() as u8
     }
@@ -855,6 +869,7 @@ impl ServiceRegistry {
         let mut agent_params_num_agent_instances = Vec::new();
 
         // Get the service
+        // TODO: unwrap or else or leave just unwrap
         let service = self.services.get(&service_id).unwrap_or_else(|| env::panic_str("Service not found"));
         for ai in service.agent_ids.iter() {
             agent_params_num_agent_instances.push(service.agent_params.get(&ai).unwrap().num_agent_instances);
@@ -898,6 +913,22 @@ impl ServiceRegistry {
         let service = self.services.get(&service_id).unwrap_or_else(|| env::panic_str("Service not found"));
         // Get operator balance for a specified service
         service.operators.get(&operator).unwrap_or_else(|| env::panic_str("Operator not found")).balance
+    }
+
+    pub fn get_operator_service_agent_instances(&self, operator: AccountId, service_id: u32) -> Vec<AccountId> {
+        // TODO: concatenate
+        // Get the service
+        let service = self.services.get(&service_id).unwrap_or_else(|| env::panic_str("Service not found"));
+        // Get agent instances for a specified agent Id
+        service.operators.get(&operator).unwrap_or_else(|| env::panic_str("Operator not found")).instances.iter().cloned().collect()
+    }
+
+    pub fn get_registry_balance(&self) -> u128 {
+        self.balance
+    }
+
+    pub fn get_registry_slashed_funds(&self) -> u128 {
+        self.slashed_funds
     }
 
 //     pub fn set_metadata(
@@ -983,9 +1014,10 @@ impl Default for ServiceRegistry {
                                                                                  reference_hash: None,
                                                                              },)),
             agent_instance_operators: LookupMap::new(StorageKey::AgentInstanceOperator),
-            slashed_funds: Default::default(),
             paused: Default::default(),
-            multisig_factory: "".parse().unwrap()
+            multisig_factory: "".parse().unwrap(),
+            balance: Default::default(),
+            slashed_funds: Default::default()
         }
     }
 }
