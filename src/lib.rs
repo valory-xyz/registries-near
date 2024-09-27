@@ -834,14 +834,8 @@ impl ServiceRegistry {
         self.services.get(&service_id).unwrap().state.clone() as u8
     }
 
-    pub fn get_agent_ids(&self, service_id: u32) -> Vec<u32> {
-        let mut agent_ids = Vec::new();
-        agent_ids.extend(self.services.get(&service_id).unwrap().agent_ids.iter());
-        agent_ids
-    }
-
-    pub fn get_service_multisig(&self, service_id: u32) -> Option<AccountId> {
-        self.services.get(&service_id).unwrap().multisig.clone()
+    pub fn get_service_multisig(&self, service_id: u32) -> AccountId {
+        self.services.get(&service_id).unwrap().multisig.clone().unwrap()
     }
 
     pub fn get_service_config_hash(&self, service_id: u32) -> [u8; 32] {
@@ -849,24 +843,62 @@ impl ServiceRegistry {
     }
 
     pub fn get_service_previous_config_hashes(&self, service_id: u32) -> Vec<[u8; 32]> {
-        let mut config_hashes = Vec::new();
         // Get config_hashes vector in reverse order without the first element, which is the current config hash
-        config_hashes.extend(self.services.get(&service_id).unwrap().config_hashes.iter().rev().skip(1));
-        config_hashes
+        self.services.get(&service_id).unwrap().config_hashes.iter().rev().skip(1).cloned().collect()
     }
 
-//     pub fn get_service(&self, service_id: u32) -> Service {
-//         self.services.get(&service_id).unwrap()
-//     }
+    pub fn get_agent_ids(&self, service_id: u32) -> Vec<u32> {
+        self.services.get(&service_id).unwrap().agent_ids.iter().cloned().collect()
+    }
 
-//     pub fn get_agent_params(&self, service_id: u32) -> AgentParams {
-//         //let mut agent_params = Vec::new();
-//
-//         // Get the service
-//         let service = self.services.get(&service_id).unwrap_or_default();//unwrap_or_else(|| env::panic_str("Service not found"));
-//         let agent_params = service.agent_params.get(&service_id).unwrap_or_default();
-//         agent_params
-//     }
+    pub fn get_service_agent_params_num_instances(&self, service_id: u32) -> Vec<u32> {
+        let mut agent_params_num_agent_instances = Vec::new();
+
+        // Get the service
+        let service = self.services.get(&service_id).unwrap_or_else(|| env::panic_str("Service not found"));
+        for ai in service.agent_ids.iter() {
+            agent_params_num_agent_instances.push(service.agent_params.get(&ai).unwrap().num_agent_instances);
+        }
+        agent_params_num_agent_instances
+    }
+
+    pub fn get_service_agent_params_bonds(&self, service_id: u32) -> Vec<u128> {
+        let mut agent_params_bonds = Vec::new();
+
+        // Get the service
+        let service = self.services.get(&service_id).unwrap_or_else(|| env::panic_str("Service not found"));
+        for ai in service.agent_ids.iter() {
+            agent_params_bonds.push(service.agent_params.get(&ai).unwrap().bond);
+        }
+        agent_params_bonds
+    }
+
+    // Get all agent instances of the service
+    pub fn get_service_agent_instances(&self, service_id: u32) -> Vec<AccountId> {
+        let mut agent_instances = Vec::new();
+        // Get the service
+        let service = self.services.get(&service_id).unwrap_or_else(|| env::panic_str("Service not found"));
+        for ai in service.agent_ids.iter() {
+            agent_instances.extend(service.agent_params.get(ai).unwrap().instances.iter().cloned());
+        }
+        agent_instances
+    }
+
+    pub fn get_instances_for_agent_id(&self, service_id: u32, agent_id: u32) -> Vec<AccountId> {
+        // TODO: concatenate
+        // Get the service
+        let service = self.services.get(&service_id).unwrap_or_else(|| env::panic_str("Service not found"));
+        // Get agent instances for a specified agent Id
+        service.agent_params.get(&agent_id).unwrap_or_else(|| env::panic_str("Agent not found")).instances.iter().cloned().collect()
+    }
+
+    pub fn get_operator_balance(&self, operator: AccountId, service_id: u32) -> u128 {
+        // TODO: concatenate
+        // Get the service
+        let service = self.services.get(&service_id).unwrap_or_else(|| env::panic_str("Service not found"));
+        // Get operator balance for a specified service
+        service.operators.get(&operator).unwrap_or_else(|| env::panic_str("Operator not found")).balance
+    }
 
 //     pub fn set_metadata(
 //         &mut self,
