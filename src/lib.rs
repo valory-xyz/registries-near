@@ -103,7 +103,6 @@ const CALL_GAS: Gas = Gas::from_tgas(5);
 const CREATE_CALL_GAS: Gas = Gas::from_tgas(50);
 
 #[near(contract_state)]
-// #[derive(Default)]
 pub struct ServiceRegistry {
     owner: AccountId,
     services: LookupMap<u32, Service>,
@@ -407,7 +406,9 @@ impl ServiceRegistry {
             .unwrap_or_else(|| env::panic_str("Service not found"));
         require!(env::predecessor_account_id() == owner_id, "Predecessor must be token owner.");
 
-        // TODO: Check that all current agent ids are updated / removes
+        // Check that all current agent ids are updated / removed to correspond the CRUD way
+        let service = self.services.get(&service_id).unwrap();
+        require!(service.agent_ids.iter().all(|ai| agent_ids.contains(ai)));
 
         self.check_service_params(
             config_hash,
@@ -488,6 +489,7 @@ impl ServiceRegistry {
         require!(service.state == ServiceState::ActiveRegistration);
 
         // Initialize or get operator struct
+        // TODO find alternative solution?
         let mut operator_data = &mut OperatorData{
             balance: 0 as u128,
             instances: Vector::new(StorageKey::AgentInstance)
@@ -564,12 +566,8 @@ impl ServiceRegistry {
 
         // Get all agent instances for the multisig
         let mut agent_instances = Vec::new();
-        for a in service.agent_ids.iter() {
-            let instances = &service.agent_params.get(a).unwrap().instances;
-            for i in instances.iter() {
-                agent_instances.push(i.clone());
-            }
-            //agent_instances.extend(service.agent_params.get(a).unwrap().instances.iter());
+        for ai in service.agent_ids.iter() {
+            agent_instances.extend(service.agent_params.get(ai).unwrap().instances.iter().cloned());
         }
 
         // Check if the multisig is not set => the service was never deployed
@@ -836,6 +834,27 @@ impl ServiceRegistry {
         self.services.get(&service_id).unwrap().state.clone() as u8
     }
 
+    pub fn get_agent_ids(&self, service_id: u32) -> Vec<u32> {
+        let mut agent_ids = Vec::new();
+        agent_ids.extend(self.services.get(&service_id).unwrap().agent_ids.iter());
+        agent_ids
+    }
+
+    pub fn get_service_multisig(&self, service_id: u32) -> Option<AccountId> {
+        self.services.get(&service_id).unwrap().multisig.clone()
+    }
+
+    pub fn get_service_config_hash(&self, service_id: u32) -> [u8; 32] {
+        *self.services.get(&service_id).unwrap().config_hashes.iter().last().unwrap()
+    }
+
+    pub fn get_service_previous_config_hashes(&self, service_id: u32) -> Vec<[u8; 32]> {
+        let mut config_hashes = Vec::new();
+        // Get config_hashes vector in reverse order without the first element, which is the current config hash
+        config_hashes.extend(self.services.get(&service_id).unwrap().config_hashes.iter().rev().skip(1));
+        config_hashes
+    }
+
 //     pub fn get_service(&self, service_id: u32) -> Service {
 //         self.services.get(&service_id).unwrap()
 //     }
@@ -868,18 +887,6 @@ impl ServiceRegistry {
 //         decimals.map(|decimals| self.decimals = decimals);
 //         icon.map(|icon| self.icon = Some(icon));
 //     }
-//
-//     #[payable]
-//     pub fn mint(&mut self, account_id: AccountId, amount: u128) {
-//         assert_eq!(
-//             env::predecessor_account_id(),
-//             self.controller,
-//             "Only controller can call mint"
-//         );
-//
-//         self.storage_deposit(Some(account_id.clone()), None);
-//         self.token.internal_deposit(&account_id, amount.into());
-//     }
 
     pub fn account_storage_usage(&self) -> StorageUsage {
         self.tokens.extra_storage_in_bytes_per_token
@@ -900,6 +907,7 @@ impl ServiceRegistry {
         self.paused = if paused { true } else { false };
     }
 
+    // TODO convert to u32?
     pub fn total_supply(&self) -> U128 {
         self.tokens.nft_total_supply()
     }
