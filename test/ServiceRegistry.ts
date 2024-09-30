@@ -38,7 +38,7 @@ test.beforeEach(async t => {
     const root = worker.rootAccount;
     const contract = await root.devDeploy(
         "target/wasm32-unknown-unknown/release/registries_near.wasm",
-        {initialBalance: NEAR.parse("100 N").toJSON()},
+        {initialBalance: NEAR.parse("5.21832 N").toJSON()},
     );
     const deployer = await root.createSubAccount("deployer", {initialBalance: NEAR.parse("100 N").toJSON()});
     const operator = await root.createSubAccount("operator", {initialBalance: NEAR.parse("100 N").toJSON()});
@@ -170,7 +170,7 @@ test("Update service with different agent ids and check its state", async t => {
     t.deepEqual(result, [configHash]);
 });
 
-test("Activate service agent registration and check its state", async t => {
+test("Activate service agent registration and check service state", async t => {
     const {root, contract, deployer} = t.context.accounts;
 
     // Initialize the contract
@@ -299,7 +299,7 @@ test("Register agent instances by the operator and check service state and value
     //t.log(balance.toHuman());
 });
 
-test("Unbond after service termination and check service state and values", async t => {
+test.only("Unbond after service termination and check service state and values", async t => {
     const {root, contract, deployer, operator, agentInstance} = t.context.accounts;
 
     // Initialize the contract
@@ -307,6 +307,15 @@ test("Unbond after service termination and check service state and values", asyn
         owner_id: deployer,
         multisig_factory: deployer
     });
+
+    let storage = await contract.view("get_storage_usage", {});
+    console.log("Storage usage before create:", storage);
+
+    //let storagePrice = await contract.view("get_storage_price", {});
+    //console.log("Storage price before create:", storagePrice);
+
+    let accountBalance = await contract.availableBalance();
+    console.log("Account balance before create:", accountBalance.toString());
 
     // Create service
     const attachedDeposit = "5 N";
@@ -319,7 +328,14 @@ test("Unbond after service termination and check service state and values", asyn
         agent_num_instances: agentNumInstances,
         agent_bonds: agentBonds,
         threshold
-    }, {attachedDeposit});
+    }, {attachedDeposit, gas: "300 Tgas"});
+
+    storage = await contract.view("get_storage_usage", {});
+    console.log("Storage usage before registration:", storage);
+
+    accountBalance = await contract.availableBalance();
+    console.log("Account balance before registration", accountBalance.toString());
+    return;
 
     // Activate service agent registration
     await deployer.call(contract, "activate_registration", {

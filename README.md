@@ -39,7 +39,7 @@ near account create-account fund-later `ACCOUNT_NAME` autogenerate-new-keypair s
 
 ### Testing
 ```bash
-npx ava test/test.ts
+npx ava test/ServiceRegistry.ts
 ```
 
 ### Localnet

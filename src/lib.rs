@@ -10,7 +10,7 @@ use near_sdk::serde_json::json;
 use near_sdk::collections::LazyOption;
 use near_sdk::{
     env, near, require, AccountId, BorshStorageKey, PanicOnDefault, Promise, PromiseOrValue, StorageUsage, Gas,
-    IntoStorageKey, PromiseError, NearToken
+    IntoStorageKey, PromiseError, NearToken, log
 };
 use near_sdk::store::{LookupMap, Vector};
 use near_sdk::ext_contract;
@@ -180,6 +180,7 @@ impl ServiceRegistry {
     }
 
     fn refund_deposit_to_account(&self, storage_used: u64, deposit_used: u128, account_id: AccountId, deposit_in: bool) {
+        log!("storage used: {}", storage_used);
         let mut refund: NearToken = NearToken::from_yoctonear(0);
         let near_deposit = NearToken::from_yoctonear(deposit_used);
         let mut required_cost = env::storage_byte_cost().saturating_mul(storage_used.into());
@@ -188,11 +189,15 @@ impl ServiceRegistry {
         } else {
             refund = refund.saturating_add(near_deposit);
         }
-        let attached_deposit = env::attached_deposit();
+        let attached_deposit = env::attached_deposit().saturating_sub(NearToken::from_yoctonear(3019244521500100000000));
 
         require!(required_cost <= attached_deposit);
 
         refund = refund.saturating_add(attached_deposit).saturating_sub(required_cost);
+        log!("required cost: {}", required_cost.as_yoctonear());
+        log!("attached_deposit: {}", attached_deposit.as_yoctonear());
+        log!("refund: {}", refund.as_yoctonear());
+        log!("balance: {}", env::account_balance().as_yoctonear());
         if refund.as_yoctonear() > 1 {
             Promise::new(account_id).transfer(refund);
         }
@@ -217,6 +222,11 @@ impl ServiceRegistry {
         agent_num_instances: Vec<u32>,
         agent_bonds: Vec<u128>
     ) {
+        // Check array lengths
+        require!(agent_ids.len() > 0);
+        require!(agent_ids.len() == agent_bonds.len());
+        require!(agent_ids.len() == agent_num_instances.len());
+
         // Check config hash
         require!(!config_hash.into_iter().all(|h| h == 0));
 
@@ -226,10 +236,6 @@ impl ServiceRegistry {
         check_agent_ids.dedup();
         require!(check_agent_ids.len() == agent_ids.len());
         //let v: Vec<_> = agent_ids.into_iter().unique().collect();
-
-        // Check array lengths
-        require!(agent_ids.len() == agent_bonds.len());
-        require!(agent_ids.len() == agent_num_instances.len());
 
         // Check non-zero agent Ids
         require!(agent_ids.into_iter().all(|id| id > 0));
@@ -378,6 +384,8 @@ impl ServiceRegistry {
         );
 
         // Increased storage
+        log!("initial storage usage {}", initial_storage_usage);
+        log!("storage usage after {}", env::storage_usage());
         let storage = env::storage_usage() - initial_storage_usage;
         self.refund_deposit_to_account(storage, 0, env::predecessor_account_id(), true);
 
@@ -465,6 +473,8 @@ impl ServiceRegistry {
         self.balance = self.balance.saturating_add(deposit.into());
 
         // Increased storage
+        log!("initial storage usage {}", initial_storage_usage);
+        log!("storage usage after {}", env::storage_usage());
         // TODO: check if this is zero, as no storage is supposedly increased
         let storage = env::storage_usage() - initial_storage_usage;
         self.refund_deposit_to_account(storage, deposit, env::predecessor_account_id(), true);
@@ -544,6 +554,8 @@ impl ServiceRegistry {
         self.balance = self.balance.saturating_add(total_bond.into());
 
         // Increased storage
+        log!("initial storage usage {}", initial_storage_usage);
+        log!("storage usage after {}", env::storage_usage());
         let storage = env::storage_usage() - initial_storage_usage;
         // Consume storage and bond cost and refund the rest
         self.refund_deposit_to_account(storage, total_bond, env::predecessor_account_id(), true);
@@ -756,7 +768,8 @@ impl ServiceRegistry {
         self.balance = self.balance.saturating_sub(refund.into());
 
         // TODO: Calculate refund of freed storage
-
+        log!("initial storage usage {}", initial_storage_usage);
+        log!("storage usage after {}", env::storage_usage());
         // Increased storage
         // TODO: check if this is zero, as no storage is supposedly increased
         // TODO: This will mostly likely fail as the storage must decrease
@@ -819,6 +832,8 @@ impl ServiceRegistry {
         // Update registry balance
         self.balance = self.balance.saturating_sub(refund.into());
 
+        log!("initial storage usage {}", initial_storage_usage);
+        log!("storage usage after {}", env::storage_usage());
         // Increased storage
         // TODO: need to correctly recalculate the storage decrease
         let storage = env::storage_usage() - initial_storage_usage;
@@ -929,6 +944,14 @@ impl ServiceRegistry {
 
     pub fn get_registry_slashed_funds(&self) -> u128 {
         self.slashed_funds
+    }
+
+    pub fn get_storage_usage(&self) -> u64 {
+        env::storage_usage()
+    }
+
+    pub fn get_storage_price(&self) -> u128 {
+        env::storage_byte_cost().saturating_mul(env::storage_usage().into()).as_yoctonear()
     }
 
 //     pub fn set_metadata(
