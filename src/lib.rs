@@ -189,7 +189,7 @@ impl ServiceRegistry {
         } else {
             refund = refund.saturating_add(near_deposit);
         }
-        let attached_deposit = env::attached_deposit().saturating_sub(NearToken::from_yoctonear(3019244521500100000000));
+        let attached_deposit = env::attached_deposit();
 
         require!(required_cost <= attached_deposit);
 
@@ -289,6 +289,8 @@ impl ServiceRegistry {
                 service.agent_params.remove(&agent_id);
             }
         }
+        service.agent_ids.flush();
+        service.agent_params.flush();
 
         service.security_deposit = security_deposit;
         service.max_num_agent_instances = max_num_agent_instances;
@@ -315,6 +317,7 @@ impl ServiceRegistry {
         // If the config hash is different, push it to the list of configs
         if !equal {
             service.config_hashes.push(config_hash);
+            service.config_hashes.flush();
         }
     }
 
@@ -372,6 +375,7 @@ impl ServiceRegistry {
                 operators: LookupMap::new(StorageKey::OperatorData)
             }
         );
+        self.services.flush();
 
         // Fill in the service parameters
         self.fill_service_params(
@@ -456,9 +460,6 @@ impl ServiceRegistry {
             .unwrap_or_else(|| env::panic_str("Service not found"));
         require!(env::predecessor_account_id() == owner_id, "Predecessor must be token owner.");
 
-        // Record current storage usage
-        let initial_storage_usage = env::storage_usage();
-
         // Get the service
         let service = self.services.get_mut(&service_id).unwrap();
 
@@ -469,15 +470,12 @@ impl ServiceRegistry {
         service.state = ServiceState::ActiveRegistration;
 
         // Update registry balance
-        let deposit = service.security_deposit;
-        self.balance = self.balance.saturating_add(deposit.into());
+        let security_deposit = service.security_deposit;
+        self.balance = self.balance.saturating_add(security_deposit.into());
 
         // Increased storage
-        log!("initial storage usage {}", initial_storage_usage);
         log!("storage usage after {}", env::storage_usage());
-        // TODO: check if this is zero, as no storage is supposedly increased
-        let storage = env::storage_usage() - initial_storage_usage;
-        self.refund_deposit_to_account(storage, deposit, env::predecessor_account_id(), true);
+        self.refund_deposit_to_account(0, security_deposit, env::predecessor_account_id(), true);
 
         // TODO: event
     }
@@ -534,7 +532,9 @@ impl ServiceRegistry {
 
             // Add agent instance into corresponding maps
             agent_params.instances.push(agent_instances[i].clone());
+            agent_params.instances.flush();
             operator_data.instances.push(agent_instances[i].clone());
+            operator_data.instances.flush();
             service.agent_instances.insert(agent_instances[i].clone(), agent_ids[i]);
 
             // Increase the total number of agent instances in a service
@@ -552,6 +552,11 @@ impl ServiceRegistry {
         // Update operator struct
         operator_data.balance = operator_data.balance.saturating_add(total_bond.into());
         self.balance = self.balance.saturating_add(total_bond.into());
+
+        service.agent_params.flush();
+        service.operators.flush();
+        service.agent_instances.flush();
+        self.agent_instance_operators.flush();
 
         // Increased storage
         log!("initial storage usage {}", initial_storage_usage);
@@ -760,7 +765,9 @@ impl ServiceRegistry {
 
         // Remove agent instances data from agent params
         for a in service.agent_ids.iter() {
-            service.agent_params.get_mut(a).unwrap().instances.clear();
+            let instances = &mut service.agent_params.get_mut(a).unwrap().instances;
+            instances.clear();
+            instances.flush();
         }
 
         // Update registry balance
@@ -773,7 +780,7 @@ impl ServiceRegistry {
         // Increased storage
         // TODO: check if this is zero, as no storage is supposedly increased
         // TODO: This will mostly likely fail as the storage must decrease
-        let storage = env::storage_usage() - initial_storage_usage;
+        let storage = initial_storage_usage - env::storage_usage();
         // Send the deposit back to the service owner
         self.refund_deposit_to_account(storage, refund, env::predecessor_account_id(), false);
 
@@ -820,6 +827,9 @@ impl ServiceRegistry {
             self.agent_instance_operators.remove(operator_data.instances.get(i).unwrap());
             service.agent_instances.remove(operator_data.instances.get(i).unwrap());
         }
+        self.agent_instance_operators.flush();
+        service.agent_instances.flush();
+
         // Check if the refund exceeds operator's balance
         // This situation is possible if the operator was slashed for the agent instance misbehavior
         if refund > operator_data.balance {
@@ -828,6 +838,7 @@ impl ServiceRegistry {
 
         // Remove the operator data from current service
         service.operators.remove(&operator);
+        service.operators.flush();
 
         // Update registry balance
         self.balance = self.balance.saturating_sub(refund.into());
@@ -836,7 +847,7 @@ impl ServiceRegistry {
         log!("storage usage after {}", env::storage_usage());
         // Increased storage
         // TODO: need to correctly recalculate the storage decrease
-        let storage = env::storage_usage() - initial_storage_usage;
+        let storage = initial_storage_usage - env::storage_usage();
         // Refund storage, bond cost and the rest
         self.refund_deposit_to_account(storage, refund, env::predecessor_account_id(), false);
 
