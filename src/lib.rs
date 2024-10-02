@@ -4,8 +4,8 @@ use near_contract_standards::non_fungible_token::metadata::{
 use near_contract_standards::non_fungible_token::enumeration::NonFungibleTokenEnumeration;
 use near_contract_standards::non_fungible_token::{NonFungibleToken, Token};
 use near_sdk::borsh::{self, BorshDeserialize, BorshSerialize};
-// use near_sdk::serde::{Serialize, Deserialize};
-use near_sdk::json_types::{Base64VecU8, U128};
+use near_sdk::serde::{Serialize, Deserialize};
+use near_sdk::json_types::{Base64VecU8, U128, Base58PublicKey};
 use near_sdk::serde_json::json;
 use near_sdk::collections::LazyOption;
 use near_sdk::{
@@ -25,6 +25,22 @@ use near_sdk::ext_contract;
 // const CURRENT_STATE_VERSION: u32 = 1;
 // const TGAS: u64 = 1_000_000_000_000;
 
+// #[near(serializers=[borsh])]
+// #[derive(Clone, Serialize, Deserialize)]
+// #[serde(crate = "near_sdk::serde", untagged)]
+// pub struct MutisigAccountMember {
+//     account_id: AccountId,
+// }
+
+const CODE: &[u8] = include_bytes!("../artifacts/multisig2.wasm");
+
+#[derive(Serialize, Deserialize)]
+#[serde(crate = "near_sdk::serde", untagged)]
+pub enum MultisigMember {
+    AccessKey { public_key: Base58PublicKey },
+    Account { account_id: AccountId },
+}
+
 // MultisigFactory interface
 #[ext_contract(multisig_factory)]
 trait MultisigFactory {
@@ -32,15 +48,16 @@ trait MultisigFactory {
     fn create(
         &mut self,
         name: AccountId,
-        members: Vec<AccountId>,
+        members: Vec<MultisigMember>,
         num_confirmations: u64,
     ) -> Promise;
 }
 
+
 // Multisig2 interface
 #[ext_contract(multisig2)]
 trait Multisig2 {
-    fn get_members(&self) -> Vec<AccountId>;
+    fn get_members(&self) -> Vec<MultisigMember>;
 }
 
 
@@ -179,23 +196,24 @@ impl ServiceRegistry {
         }
     }
 
-    fn refund_deposit_to_account(&self, storage_used: u64, deposit_used: u128, account_id: AccountId, deposit_in: bool) {
+    fn refund_deposit_to_account(&self, storage_used: u64, service_deposit: u128, account_id: AccountId, deposit_in: bool) {
         log!("storage used: {}", storage_used);
-        let mut refund: NearToken = NearToken::from_yoctonear(0);
-        let near_deposit = NearToken::from_yoctonear(deposit_used);
+        let near_deposit = NearToken::from_yoctonear(service_deposit);
         let mut required_cost = env::storage_byte_cost().saturating_mul(storage_used.into());
+        required_cost = required_cost.saturating_add(near_deposit);
+
+        let mut refund = env::attached_deposit();
+        // Deposit is added on a balance
         if deposit_in {
-            required_cost = required_cost.saturating_add(near_deposit);
+            // Required cost must not be bigger than the attached deposit
+            require!(required_cost <= refund);
+            refund = refund.saturating_sub(required_cost);
         } else {
-            refund = refund.saturating_add(near_deposit);
+            // This could be the case if the storage price went up during the lifespan of the service
+            require!(required_cost <= env::account_balance());
+            refund = refund.saturating_add(required_cost);
         }
-        let attached_deposit = env::attached_deposit();
-
-        require!(required_cost <= attached_deposit);
-
-        refund = refund.saturating_add(attached_deposit).saturating_sub(required_cost);
         log!("required cost: {}", required_cost.as_yoctonear());
-        log!("attached_deposit: {}", attached_deposit.as_yoctonear());
         log!("refund: {}", refund.as_yoctonear());
         log!("balance: {}", env::account_balance().as_yoctonear());
         if refund.as_yoctonear() > 1 {
@@ -289,6 +307,7 @@ impl ServiceRegistry {
                 service.agent_params.remove(&agent_id);
             }
         }
+        // Record the state of collections
         service.agent_ids.flush();
         service.agent_params.flush();
 
@@ -375,6 +394,7 @@ impl ServiceRegistry {
                 operators: LookupMap::new(StorageKey::OperatorData)
             }
         );
+        // Record service map state
         self.services.flush();
 
         // Fill in the service parameters
@@ -591,7 +611,11 @@ impl ServiceRegistry {
         // Get all agent instances for the multisig
         let mut agent_instances = Vec::new();
         for ai in service.agent_ids.iter() {
-            agent_instances.extend(service.agent_params.get(ai).unwrap().instances.iter().cloned());
+            //agent_instances.extend(service.agent_params.get(ai).unwrap().instances.iter().cloned());
+            let instances = &service.agent_params.get(ai).unwrap().instances;
+            for inst in instances.iter() {
+                agent_instances.push(MultisigMember::Account{account_id: inst.clone()});
+            }
         }
 
         // Check if the multisig is not set => the service was never deployed
@@ -600,16 +624,37 @@ impl ServiceRegistry {
         if multisig.is_none() || multisig.clone().unwrap() != name_multisig {
             // Create new multisig
             //log!("Calling external");
-            multisig_factory::ext(self.multisig_factory.clone())
-                .with_static_gas(CREATE_CALL_GAS)
-                .with_attached_deposit(env::attached_deposit())
-                .create(name_multisig.clone(), agent_instances.clone(), service.threshold as u64)
-                .then(
-                   // Create a promise to callback create_multisig_callback
-                   Self::ext(env::current_account_id())
-                       .with_static_gas(CALL_GAS)
-                       .create_multisig_callback(service_id, name_multisig.clone())
-                );
+            let multisig_account = format!("{}.{}", name_multisig, env::current_account_id());
+            Promise::new(multisig_account.parse().unwrap())
+                .create_account()
+                .deploy_contract(CODE.to_vec())
+                .transfer(env::attached_deposit())
+                .function_call(
+                    "new".to_string(),
+                    json!({ "members": agent_instances, "num_confirmations": service.threshold as u64 })
+                        .to_string()
+                        .as_bytes()
+                        .to_vec(),
+                    NearToken::from_yoctonear(0),
+                    env::prepaid_gas().saturating_sub(CREATE_CALL_GAS),
+                )
+            .then(
+               // Create a promise to callback create_multisig_callback
+               Self::ext(env::current_account_id())
+                   .with_static_gas(CALL_GAS)
+                   .create_multisig_callback(service_id, name_multisig.clone())
+            );
+
+//             multisig_factory::ext(self.multisig_factory.clone())
+//                 .with_static_gas(CREATE_CALL_GAS)
+//                 .with_attached_deposit(env::attached_deposit())
+//                 .create(name_multisig.clone(), agent_instances, service.threshold as u64)
+//                 .then(
+//                    // Create a promise to callback create_multisig_callback
+//                    Self::ext(env::current_account_id())
+//                        .with_static_gas(CALL_GAS)
+//                        .create_multisig_callback(service_id, name_multisig.clone())
+//                 );
         } else {
             // Update multisig with the new owners set
             // Get multisig owners
@@ -621,7 +666,7 @@ impl ServiceRegistry {
                    // Create a promise to callback update_multisig_callback
                    Self::ext(env::current_account_id())
                        .with_static_gas(CALL_GAS)
-                       .update_multisig_callback(service_id, agent_instances.clone())
+                       .update_multisig_callback(service_id, agent_instances)
                 );
         }
     }
@@ -635,7 +680,9 @@ impl ServiceRegistry {
     ) {
         // Check if the promise succeeded by calling the method outlined in external.rs
         if call_result.is_err() {
-            //log!("There was an error contacting Hello NEAR");
+            env::panic_str("Multisig creation failed");
+
+            // TODO refund
         }
 
         // Get the service, record its multisig and update state
@@ -650,26 +697,29 @@ impl ServiceRegistry {
     pub fn update_multisig_callback(
         &mut self,
         service_id: u32,
-        agent_instances: Vec<AccountId>,
+        agent_instances: Vec<MultisigMember>,
         #[callback_result] call_result: Result<Vec<AccountId>, PromiseError>,
     ) -> bool {
         // Check if the promise succeeded by calling the method outlined in external.rs
         if call_result.is_err() {
-            //log!("There was an error contacting Hello NEAR");
+            env::panic_str("Multisig update failed");
+
+            // TODO refund
         }
 
         // Get the service, record its multisig and update state
         let service = self.services.get_mut(&service_id).unwrap();
 
-        // Check agent instances vs multisig members
-        let multisig_members = call_result.unwrap();
-        let matching = agent_instances.iter().zip(multisig_members.iter()).filter(|&(ai, mm)| ai == mm).count();
         let mut success = false;
-        if matching == agent_instances.len() && matching == multisig_members.len() {
-            // Update service state
-            service.state = ServiceState::Deployed;
-            success = true;
-        }
+//         // Check agent instances vs multisig members
+//         let multisig_members = call_result.unwrap();
+//         let matching = agent_instances.iter().zip(multisig_members.iter()).filter(|&(ai, mm)| ai == mm).count();
+//         //let matching = agent_instances.iter().zip(multisig_members.iter()).filter(|&(ai, mm)| match ai {MultisigMember::Account(value) => value == mm, _ => {false}}).count();
+//         if matching == agent_instances.len() && matching == multisig_members.len() {
+//             // Update service state
+//             service.state = ServiceState::Deployed;
+//             success = true;
+//         }
 
         // Revert if the multisig members comparison fails
         require!(success);
@@ -689,9 +739,6 @@ impl ServiceRegistry {
     ) {
         // Check array lengths
         require!(amounts.len() == agent_instances.len());
-
-        // Record current storage usage
-        let initial_storage_usage = env::storage_usage();
 
         // Get the service
         let service = self.services.get_mut(&service_id).unwrap();
@@ -727,11 +774,6 @@ impl ServiceRegistry {
 
             // TODO event
         }
-
-        // Increased storage
-        let storage = env::storage_usage() - initial_storage_usage;
-        // TODO this is probably not needed as no storage is affected
-        self.refund_deposit_to_account(storage, 0, env::predecessor_account_id(), true);
     }
 
     // TODO: needs to be payable?
