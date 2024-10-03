@@ -38,8 +38,19 @@ near account create-account fund-later `ACCOUNT_NAME` autogenerate-new-keypair s
 ```
 
 ### Testing
+Sandbox:
 ```bash
 npx ava test/ServiceRegistry.ts
+```
+
+Testnet:
+```bash
+npx ava --config ava.testnet.config.cjs test/testnet_ServiceRegistry.ts
+```
+
+Testing with debug:
+```bash
+NEAR_WORKSPACES_DEBUG=true npx ava test/ServiceRegistry.ts
 ```
 
 ### Localnet

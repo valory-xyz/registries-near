@@ -117,7 +117,7 @@ pub struct Service {
 }
 
 const CALL_GAS: Gas = Gas::from_tgas(5);
-const CREATE_CALL_GAS: Gas = Gas::from_tgas(50);
+const CREATE_CALL_GAS: Gas = Gas::from_tgas(100);
 
 #[near(contract_state)]
 pub struct ServiceRegistry {
@@ -469,16 +469,42 @@ impl ServiceRegistry {
     }
 
     #[payable]
+    pub fn ft_on_transfer(
+        &mut self,
+        sender_id: AccountId,
+        amount: U128,
+        msg: String,
+    ) -> PromiseOrValue<U128> {
+        // TODO Should probably whitelist tokens?
+        let token = env::predecessor_account_id();
+        log!("Hello from token! {}", token);
+        log!("Passed amount: {}", env::attached_deposit().as_yoctonear());
+
+        let service_id = 1;
+        let owner_id = self.tokens
+            .owner_by_id
+            .get(&service_id.to_string());
+        require!(owner_id.is_some(), "Service not found");
+        self.activate_registration(service_id, owner_id);
+
+        // No tokens will be returned
+        PromiseOrValue::Value(U128::from(0))
+    }
+
+    #[payable]
     pub fn activate_registration(
         &mut self,
-        service_id: u32
+        service_id: u32,
+        account_id: Option<AccountId>
     ) {
+        let service_owner = account_id.unwrap_or_else(env::predecessor_account_id);
+
         // Check for service owner
         let owner_id = self.tokens
             .owner_by_id
             .get(&service_id.to_string())
             .unwrap_or_else(|| env::panic_str("Service not found"));
-        require!(env::predecessor_account_id() == owner_id, "Predecessor must be token owner.");
+        require!(service_owner == owner_id, "Predecessor must be token owner.");
 
         // Get the service
         let service = self.services.get_mut(&service_id).unwrap();
@@ -588,13 +614,41 @@ impl ServiceRegistry {
         // TODO: event
     }
 
+    pub fn get_multisig_members(&self, name_multisig: AccountId) -> Promise {
+        // Update multisig with the new owners set
+        // Get multisig owners
+        multisig2::ext(name_multisig)
+            .with_static_gas(CALL_GAS)
+            .get_members()
+            // Compare multisig owners with the set of agent instances
+            .then(
+               // Create a promise to callback update_multisig_callback
+               Self::ext(env::current_account_id())
+                   .with_static_gas(CALL_GAS)
+                   .check_members()
+            )
+    }
+
+    #[private]
+    pub fn check_members(
+        &self,
+        #[callback_result] call_result: Result<Vec<MultisigMember>, PromiseError>,
+    ) -> u64 {
+        // Check if the promise succeeded by calling the method outlined in external.rs
+        if call_result.is_err() {
+            env::panic_str("Multisig check failed");
+        }
+
+        call_result.unwrap().len() as u64
+    }
+
     // TODO: needs to be payable?
     #[payable]
     pub fn deploy(
         &mut self,
         service_id: u32,
         name_multisig: AccountId
-    ) {
+    ) -> Promise {
         // Check for service owner
         let owner_id = self.tokens
             .owner_by_id
@@ -636,14 +690,14 @@ impl ServiceRegistry {
                         .as_bytes()
                         .to_vec(),
                     NearToken::from_yoctonear(0),
-                    env::prepaid_gas().saturating_sub(CREATE_CALL_GAS),
+                    env::prepaid_gas().saturating_sub(CALL_GAS),
                 )
             .then(
                // Create a promise to callback create_multisig_callback
                Self::ext(env::current_account_id())
                    .with_static_gas(CALL_GAS)
                    .create_multisig_callback(service_id, name_multisig.clone())
-            );
+            )
 
 //             multisig_factory::ext(self.multisig_factory.clone())
 //                 .with_static_gas(CREATE_CALL_GAS)
@@ -667,7 +721,7 @@ impl ServiceRegistry {
                    Self::ext(env::current_account_id())
                        .with_static_gas(CALL_GAS)
                        .update_multisig_callback(service_id, agent_instances)
-                );
+                )
         }
     }
 
@@ -698,7 +752,7 @@ impl ServiceRegistry {
         &mut self,
         service_id: u32,
         agent_instances: Vec<MultisigMember>,
-        #[callback_result] call_result: Result<Vec<AccountId>, PromiseError>,
+        #[callback_result] call_result: Result<Vec<MultisigMember>, PromiseError>,
     ) -> bool {
         // Check if the promise succeeded by calling the method outlined in external.rs
         if call_result.is_err() {
