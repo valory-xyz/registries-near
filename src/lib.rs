@@ -60,6 +60,12 @@ trait Multisig2 {
     fn get_members(&self) -> Vec<MultisigMember>;
 }
 
+// FungibleToken interface
+#[ext_contract(fungible_token)]
+trait FungibleToken {
+    fn ft_transfer(&mut self, receiver_id: AccountId, amount: U128, memo: Option<String>);
+}
+
 
 #[near(serializers=[borsh])]
 #[derive(PartialEq, Clone)]
@@ -125,6 +131,7 @@ pub struct ServiceRegistry {
     services: LookupMap<u32, Service>,
     tokens: NonFungibleToken,
     metadata: LazyOption<NFTContractMetadata>,
+    token_balances: LookupMap<AccountId, LookupMap<AccountId, u128>>,
     agent_instance_operators: LookupMap<AccountId, AccountId>,
     paused: bool,
     multisig_factory: AccountId,
@@ -149,7 +156,9 @@ enum StorageKey {
     AgentInstancePerAgentId,
     ConfigHash,
     OperatorData,
-    AgentInstanceOperator
+    AgentInstanceOperator,
+    CustomToken,
+    TokenBalances
 }
 
 #[near]
@@ -189,6 +198,7 @@ impl ServiceRegistry {
             ),
             metadata: LazyOption::new(StorageKey::Metadata, Some(&metadata)),
             agent_instance_operators: LookupMap::new(StorageKey::AgentInstanceOperator),
+            token_balances: LookupMap::new(StorageKey::CustomToken),
             paused: false,
             multisig_factory,
             balance: 0 as u128,
@@ -261,7 +271,9 @@ impl ServiceRegistry {
 
     fn fill_service_params(
         &mut self,
+        service_owner: AccountId,
         service_id: u32,
+        token: Option<AccountId>,
         config_hash: [u8; 32],
         agent_ids: Vec<u32>,
         agent_num_instances: Vec<u32>,
@@ -313,6 +325,25 @@ impl ServiceRegistry {
 
         service.security_deposit = security_deposit;
         service.max_num_agent_instances = max_num_agent_instances;
+
+        // Check the token field and register the service owner, if required
+        if token.is_some() && token != service.token {
+            // Initialize or get registered token map
+            let token_balances = self
+                .token_balances
+                // Get token map
+                .entry(token.clone().unwrap())
+                // or create a new one if not
+                .or_insert(LookupMap::new(StorageKey::TokenBalances));
+
+            // Check if the service owner is registered
+            if !token_balances.contains_key(&service_owner) {
+                token_balances.set(service_owner, Some(0));
+                token_balances.flush();
+            }
+            self.token_balances.flush();
+            service.token = token;
+        }
 
         // Check for the correct threshold: no less than ceil((n * 2 + 1) / 3) of all the agent instances combined
         let mut check_threshold = max_num_agent_instances * 2 + 1;
@@ -373,7 +404,7 @@ impl ServiceRegistry {
 
         // Mint new service
         // This function is used such that the storage calculation is not engaged and deposit is not refunded
-        self.tokens.internal_mint_with_refund(service_id.to_string().clone(), service_owner, Some(metadata), None);
+        self.tokens.internal_mint_with_refund(service_id.to_string().clone(), service_owner.clone(), Some(metadata), None);
 
         // Allocate the service
         self.services.insert(
@@ -394,18 +425,20 @@ impl ServiceRegistry {
                 operators: LookupMap::new(StorageKey::OperatorData)
             }
         );
-        // Record service map state
-        self.services.flush();
 
         // Fill in the service parameters
         self.fill_service_params(
+            service_owner,
             service_id,
+            token,
             config_hash,
             agent_ids.clone(),
             agent_num_instances.clone(),
             agent_bonds.clone(),
             threshold
         );
+        // Record service map state
+        self.services.flush();
 
         // Increased storage
         log!("initial storage usage {}", initial_storage_usage);
@@ -453,7 +486,9 @@ impl ServiceRegistry {
 
         // Fill in the service parameters
         self.fill_service_params(
+            owner_id,
             service_id,
+            token,
             config_hash,
             agent_ids.clone(),
             agent_num_instances.clone(),
@@ -466,29 +501,6 @@ impl ServiceRegistry {
         self.refund_deposit_to_account(storage, 0, env::predecessor_account_id(), true);
 
         // TODO: event
-    }
-
-    #[payable]
-    pub fn ft_on_transfer(
-        &mut self,
-        sender_id: AccountId,
-        amount: U128,
-        msg: String,
-    ) -> PromiseOrValue<U128> {
-        // TODO Should probably whitelist tokens?
-        let token = env::predecessor_account_id();
-        log!("Hello from token! {}", token);
-        log!("Passed amount: {}", env::attached_deposit().as_yoctonear());
-
-        let service_id = 1;
-        let owner_id = self.tokens
-            .owner_by_id
-            .get(&service_id.to_string());
-        require!(owner_id.is_some(), "Service not found");
-        self.activate_registration(service_id, owner_id);
-
-        // No tokens will be returned
-        PromiseOrValue::Value(U128::from(0))
     }
 
     #[payable]
@@ -521,7 +533,26 @@ impl ServiceRegistry {
 
         // Increased storage
         log!("storage usage after {}", env::storage_usage());
-        self.refund_deposit_to_account(0, security_deposit, env::predecessor_account_id(), true);
+        if service.token.is_none() {
+            self.refund_deposit_to_account(0, security_deposit, env::predecessor_account_id(), true);
+        } else {
+            // Get token balance for the service owner and reduce it by a security deposit value
+            if let Some(b) = self
+                .token_balances
+                .get_mut(&service.token.clone().unwrap())
+                .unwrap_or_else(|| env::panic_str("Token not registered"))
+                .get_mut(&owner_id)
+            {
+                // Decrease by the security deposit amount
+                if *b < security_deposit {
+                    env::panic_str("Not enough token deposit");
+                }
+                *b -= security_deposit;
+            } else {
+                // Fail otherwise
+                env::panic_str("Sender not registered");
+            }
+        }
 
         // TODO: event
     }
@@ -608,6 +639,29 @@ impl ServiceRegistry {
         log!("initial storage usage {}", initial_storage_usage);
         log!("storage usage after {}", env::storage_usage());
         let storage = env::storage_usage() - initial_storage_usage;
+
+        if service.token.is_some() {
+            // Get token balance for the service owner and reduce it by a security deposit value
+            if let Some(b) = self
+                .token_balances
+                .get_mut(&service.token.clone().unwrap())
+                .unwrap_or_else(|| env::panic_str("Token not registered"))
+                .get_mut(&operator)
+            {
+                // Decrease by the security deposit amount
+                if *b < total_bond {
+                    env::panic_str("Not enough token deposit");
+                }
+                *b -= total_bond;
+            } else {
+                // Fail otherwise
+                env::panic_str("Sender not registered");
+            }
+
+            // Security deposit is set to zero since it was deposited via token transfer already
+            total_bond = 0;
+        }
+
         // Consume storage and bond cost and refund the rest
         self.refund_deposit_to_account(storage, total_bond, env::predecessor_account_id(), true);
 
@@ -867,15 +921,24 @@ impl ServiceRegistry {
         }
 
         // Update registry balance
-        let refund = service.security_deposit;
+        let mut refund = service.security_deposit;
         self.balance = self.balance.saturating_sub(refund.into());
 
         // TODO: Calculate refund of freed storage
         log!("initial storage usage {}", initial_storage_usage);
         log!("storage usage after {}", env::storage_usage());
-        // Increased storage
-        // TODO: check if this is zero, as no storage is supposedly increased
-        // TODO: This will mostly likely fail as the storage must decrease
+
+        if service.token.is_some() {
+            // Send the token refund back to the service owner
+            fungible_token::ext(service.token.clone().unwrap())
+                .with_static_gas(CALL_GAS)
+                .ft_transfer(owner_id, U128::from(refund), None);
+
+            // Zero the refund since it has been already sent back
+            refund = 0;
+        }
+
+        // Decreased storage
         let storage = initial_storage_usage - env::storage_usage();
         // Send the deposit back to the service owner
         self.refund_deposit_to_account(storage, refund, env::predecessor_account_id(), false);
@@ -939,6 +1002,16 @@ impl ServiceRegistry {
         // Update registry balance
         self.balance = self.balance.saturating_sub(refund.into());
 
+        if service.token.is_some() {
+            // Send the token refund back to the service owner
+            fungible_token::ext(service.token.clone().unwrap())
+                .with_static_gas(CALL_GAS)
+                .ft_transfer(operator, U128::from(refund), None);
+
+            // Zero the refund since it has been already sent back
+            refund = 0;
+        }
+
         log!("initial storage usage {}", initial_storage_usage);
         log!("storage usage after {}", env::storage_usage());
         // Increased storage
@@ -949,6 +1022,9 @@ impl ServiceRegistry {
 
         // TODO: event
     }
+
+    // TODO: implementation
+    //pub fn withdraw(&mut self, token: AccountId)
 
     // TODO Shall this be payable as 1 yocto is needed for?
     pub fn drain(&mut self) {
@@ -963,6 +1039,62 @@ impl ServiceRegistry {
         }
 
         // TODO: event
+    }
+
+    // Call by the operator
+    #[payable]
+    pub fn storage_deposit(&mut self, token: AccountId) {
+        let initial_storage_usage = env::storage_usage();
+
+        let account_id = env::predecessor_account_id();
+
+        // Check the token field and register account, if required
+        // Initialize or get registered token map
+        let token_balances = self
+            .token_balances
+            // Get token map
+            .entry(token)
+            // or create a new one if not
+            .or_insert(LookupMap::new(StorageKey::TokenBalances));
+
+        // Check if the service owner is registered
+        if !token_balances.contains_key(&account_id) {
+            token_balances.set(account_id.clone(), Some(0));
+            token_balances.flush();
+        }
+        self.token_balances.flush();
+
+        let storage = env::storage_usage() - initial_storage_usage;
+        // Send the deposit back to the service owner
+        self.refund_deposit_to_account(storage, 0, account_id, true);
+    }
+
+    pub fn ft_on_transfer(
+        &mut self,
+        sender_id: AccountId,
+        amount: U128,
+        msg: String,
+    ) -> PromiseOrValue<U128> {
+        let token = env::predecessor_account_id();
+
+        // Get token balance the sender
+        if let Some(b) = self
+            .token_balances
+            .get_mut(&token)
+            .unwrap_or_else(|| env::panic_str("Token not registered"))
+            .get_mut(&sender_id)
+        {
+            // Increase for the provided amount
+            *b += amount.0;
+        } else {
+            // Fail otherwise
+            env::panic_str("Sender not registered");
+        }
+
+        log!("Increased the token amount! {}", amount.0);
+
+        // No tokens will be returned
+        PromiseOrValue::Value(U128::from(0))
     }
 
     // TODO: unwrap or else or default panic message is ok?
@@ -1135,15 +1267,16 @@ impl Default for ServiceRegistry {
                 Some(StorageKey::Approval),
             ),
             metadata: LazyOption::new(StorageKey::Metadata, Some(&NFTContractMetadata {
-                                                                                 spec: Default::default(),
-                                                                                 name: Default::default(),
-                                                                                 symbol: Default::default(),
-                                                                                 icon: None,
-                                                                                 base_uri: None,
-                                                                                 reference: None,
-                                                                                 reference_hash: None,
-                                                                             },)),
+                spec: Default::default(),
+                name: Default::default(),
+                symbol: Default::default(),
+                icon: None,
+                base_uri: None,
+                reference: None,
+                reference_hash: None,
+            })),
             agent_instance_operators: LookupMap::new(StorageKey::AgentInstanceOperator),
+            token_balances: LookupMap::new(StorageKey::CustomToken),
             paused: Default::default(),
             multisig_factory: "".parse().unwrap(),
             balance: Default::default(),

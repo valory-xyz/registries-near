@@ -39,7 +39,7 @@ test.beforeEach(async t => {
     // Deploy the main registry contract
     const contract = await root.devDeploy(
         "target/wasm32-unknown-unknown/release/registries_near.wasm",
-        {initialBalance: NEAR.parse("10 N").toJSON()},
+        {initialBalance: NEAR.parse("20 N").toJSON()},
     );
     // Deploy the test token contract
     const token = await root.devDeploy(
@@ -64,6 +64,11 @@ test.beforeEach(async t => {
 
     await root.call(token, "mint", {
         account_id: deployer.accountId,
+        amount: NEAR.parse("100 N")
+    }, {attachedDeposit: NEAR.parse("1 N")});
+
+    await root.call(token, "mint", {
+        account_id: operator.accountId,
         amount: NEAR.parse("100 N")
     }, {attachedDeposit: NEAR.parse("1 N")});
 
@@ -98,7 +103,6 @@ test("Create service and check its state", async t => {
     await root.call(contract, "create", {
         service_owner: deployer,
         metadata: defaultMetadata,
-        token: deployer,
         config_hash: configHash,
         agent_ids: agentIds,
         agent_num_instances: agentNumInstances,
@@ -128,7 +132,6 @@ test("Update service with the same setup and check its state", async t => {
     await root.call(contract, "create", {
         service_owner: deployer,
         metadata: defaultMetadata,
-        token: deployer,
         config_hash: configHash,
         agent_ids: agentIds,
         agent_num_instances: agentNumInstances,
@@ -139,7 +142,6 @@ test("Update service with the same setup and check its state", async t => {
     // Update service
     await deployer.call(contract, "update", {
         service_id: serviceId,
-        token: deployer,
         config_hash: configHash,
         agent_ids: agentIds,
         agent_num_instances: agentNumInstances,
@@ -166,7 +168,6 @@ test("Update service with different agent ids and check its state", async t => {
     await root.call(contract, "create", {
         service_owner: deployer,
         metadata: defaultMetadata,
-        token: deployer,
         config_hash: configHash,
         agent_ids: agentIds,
         agent_num_instances: agentNumInstances,
@@ -177,7 +178,6 @@ test("Update service with different agent ids and check its state", async t => {
     // Update service
     await deployer.call(contract, "update", {
         service_id: serviceId,
-        token: deployer,
         config_hash: configHash2,
         agent_ids: [1, 2],
         agent_num_instances: [0, 1],
@@ -212,7 +212,6 @@ test("Activate service agent registration and check service state", async t => {
     await root.call(contract, "create", {
         service_owner: deployer,
         metadata: defaultMetadata,
-        token: deployer,
         config_hash: configHash,
         agent_ids: agentIds,
         agent_num_instances: agentNumInstances,
@@ -244,7 +243,6 @@ test("Terminate service after its registration activation and check its state", 
     await root.call(contract, "create", {
         service_owner: deployer,
         metadata: defaultMetadata,
-        token: deployer,
         config_hash: configHash,
         agent_ids: agentIds,
         agent_num_instances: agentNumInstances,
@@ -281,7 +279,6 @@ test("Register agent instances by the operator and check service state and value
     await root.call(contract, "create", {
         service_owner: deployer,
         metadata: defaultMetadata,
-        token: deployer,
         config_hash: configHash,
         agent_ids: agentIds,
         agent_num_instances: agentNumInstances,
@@ -350,7 +347,6 @@ test("Unbond after service termination and check service state and values", asyn
     await root.call(contract, "create", {
         service_owner: deployer,
         metadata: defaultMetadata,
-        token: deployer,
         config_hash: configHash,
         agent_ids: agentIds,
         agent_num_instances: agentNumInstances,
@@ -462,7 +458,6 @@ test("Deploy, then unbond after service termination and check service state and 
     await root.call(contract, "create", {
         service_owner: deployer,
         metadata: defaultMetadata,
-        token: deployer,
         config_hash: configHash,
         agent_ids: agentIds,
         agent_num_instances: agentNumInstances,
@@ -547,7 +542,39 @@ test("Deploy, then unbond after service termination and check service state and 
     t.is(balance, 0);
 });
 
-test.only("Create service and activate registration with a token deposit", async t => {
+test("Unbond after service termination and check service state and values 22222", async t => {
+    const {root, contract, token, deployer, operator, agentInstance} = t.context.accounts;
+
+    // Initialize the contract
+    await root.call(contract, "new_default_meta", {
+        owner_id: deployer,
+        multisig_factory: deployer
+    });
+
+    let storage = await contract.view("get_storage_usage", {});
+    console.log("Storage usage before create:", storage);
+
+    //let storagePrice = await contract.view("get_storage_price", {});
+    //console.log("Storage price before create:", storagePrice);
+
+    let accountBalance = await contract.availableBalance();
+    console.log("Account balance before create:", accountBalance.toString());
+
+    // Create service
+    const attachedDeposit = "5 N";
+    await root.call(contract, "create", {
+        service_owner: deployer,
+        metadata: defaultMetadata,
+        token: token.accountId,
+        config_hash: configHash,
+        agent_ids: agentIds,
+        agent_num_instances: agentNumInstances,
+        agent_bonds: agentBonds,
+        threshold
+    }, {attachedDeposit, gas: "300 Tgas"});
+});
+
+test.only("Unbond after terminating the service with a token deposit", async t => {
     const {root, contract, token, deployer, operator, agentInstance} = t.context.accounts;
 
     // Initialize the contract
@@ -561,7 +588,7 @@ test.only("Create service and activate registration with a token deposit", async
     await root.call(contract, "create", {
         service_owner: deployer,
         metadata: defaultMetadata,
-        token: deployer,
+        token: token.accountId,
         config_hash: configHash,
         agent_ids: agentIds,
         agent_num_instances: agentNumInstances,
@@ -573,11 +600,86 @@ test.only("Create service and activate registration with a token deposit", async
     await deployer.call(token, "ft_transfer_call", {
         receiver_id: contract.accountId,
         amount: agentBonds[0].toString(),
-        memo: "",
-        msg: "activate_registration:1"
-    }, {attachedDeposit: "100", gas: "300 Tgas"});
+        msg: ""
+    }, {attachedDeposit: "1", gas: "300 Tgas"});
+
+    let storage = await contract.view("get_storage_usage", {});
+    console.log("Storage usage before activation:", storage);
+
+    let accountBalance = await contract.availableBalance();
+    console.log("Account balance before activation", accountBalance.toString());
+
+    // Activate service agent registration
+    await deployer.call(contract, "activate_registration", {
+        service_id: serviceId,
+    }, {attachedDeposit});
 
     // Check that the service is in the ActiveRegistration state
     let result = await contract.view("get_service_state", {service_id: serviceId});
     t.is(result, 2);
+
+    storage = await contract.view("get_storage_usage", {});
+    console.log("Storage usage before registration:", storage);
+
+    accountBalance = await contract.availableBalance();
+    console.log("Account balance before registration", accountBalance.toString());
+
+    // Register operator
+    await operator.call(contract, "storage_deposit", {
+        token: token.accountId
+    }, {attachedDeposit});
+
+    // Send tokens to the registry contract
+    await operator.call(token, "ft_transfer_call", {
+        receiver_id: contract.accountId,
+        amount: agentBonds[0].toString(),
+        msg: ""
+    }, {attachedDeposit: "1", gas: "300 Tgas"});
+
+    // Operator to register agent instance
+    await operator.call(contract, "register_agents", {
+        service_id: serviceId,
+        agent_instances: [agentInstance],
+        agent_ids: agentIds
+    }, {attachedDeposit});
+
+    storage = await contract.view("get_storage_usage", {});
+    console.log("Storage usage before terminate:", storage);
+
+    accountBalance = await contract.availableBalance();
+    console.log("Account balance before terminate", accountBalance.toString());
+
+    // Terminate service
+    await deployer.call(contract, "terminate", {
+        service_id: serviceId,
+    }, {attachedDeposit});
+
+    storage = await contract.view("get_storage_usage", {});
+    console.log("Storage usage before unbond:", storage);
+
+    accountBalance = await contract.availableBalance();
+    console.log("Account balance before unbond", accountBalance.toString());
+
+    // Check registry balance after registration activation
+    let balance = await contract.view("get_registry_balance", {});
+    t.is(balance, agentBonds[0]);
+
+    // Check that the service is in the TerminatedBonded state
+    result = await contract.view("get_service_state", {service_id: serviceId});
+    t.is(result, 5);
+
+    // Unbond operator
+    await operator.call(contract, "unbond", {
+        service_id: serviceId,
+    }, {attachedDeposit});
+
+    storage = await contract.view("get_storage_usage", {});
+    console.log("Storage usage after unbond:", storage);
+
+    accountBalance = await contract.availableBalance();
+    console.log("Account balance after unbond", accountBalance.toString());
+
+    // Check contract balance after registration
+    balance = await contract.view("get_registry_balance", {});
+    t.is(balance, 0);
 });
