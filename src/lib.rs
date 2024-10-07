@@ -223,7 +223,7 @@ impl ServiceRegistry {
             require!(required_cost <= env::account_balance());
             refund = refund.saturating_add(required_cost);
         }
-        log!("required cost: {}", required_cost.as_yoctonear());
+        //log!("required cost: {}", required_cost.as_yoctonear());
         log!("refund: {}", refund.as_yoctonear());
         log!("balance: {}", env::account_balance().as_yoctonear());
         if refund.as_yoctonear() > 1 {
@@ -441,8 +441,8 @@ impl ServiceRegistry {
         self.services.flush();
 
         // Increased storage
-        log!("initial storage usage {}", initial_storage_usage);
-        log!("storage usage after {}", env::storage_usage());
+//         log!("initial storage usage {}", initial_storage_usage);
+//         log!("storage usage after {}", env::storage_usage());
         let storage = env::storage_usage() - initial_storage_usage;
         self.refund_deposit_to_account(storage, 0, env::predecessor_account_id(), true);
 
@@ -532,7 +532,8 @@ impl ServiceRegistry {
         self.balance = self.balance.saturating_add(security_deposit.into());
 
         // Increased storage
-        log!("storage usage after {}", env::storage_usage());
+//         log!("storage usage after {}", env::storage_usage());
+
         if service.token.is_none() {
             self.refund_deposit_to_account(0, security_deposit, env::predecessor_account_id(), true);
         } else {
@@ -636,8 +637,8 @@ impl ServiceRegistry {
         self.agent_instance_operators.flush();
 
         // Increased storage
-        log!("initial storage usage {}", initial_storage_usage);
-        log!("storage usage after {}", env::storage_usage());
+//         log!("initial storage usage {}", initial_storage_usage);
+//         log!("storage usage after {}", env::storage_usage());
         let storage = env::storage_usage() - initial_storage_usage;
 
         if service.token.is_some() {
@@ -925,8 +926,8 @@ impl ServiceRegistry {
         self.balance = self.balance.saturating_sub(refund.into());
 
         // TODO: Calculate refund of freed storage
-        log!("initial storage usage {}", initial_storage_usage);
-        log!("storage usage after {}", env::storage_usage());
+        //log!("initial storage usage {}", initial_storage_usage);
+        //log!("storage usage after {}", env::storage_usage());
 
         if service.token.is_some() {
             // Send the token refund back to the service owner
@@ -1012,8 +1013,8 @@ impl ServiceRegistry {
             refund = 0;
         }
 
-        log!("initial storage usage {}", initial_storage_usage);
-        log!("storage usage after {}", env::storage_usage());
+//         log!("initial storage usage {}", initial_storage_usage);
+//         log!("storage usage after {}", env::storage_usage());
         // Increased storage
         // TODO: need to correctly recalculate the storage decrease
         let storage = initial_storage_usage - env::storage_usage();
@@ -1023,8 +1024,31 @@ impl ServiceRegistry {
         // TODO: event
     }
 
-    // TODO: implementation
-    //pub fn withdraw(&mut self, token: AccountId)
+    pub fn withdraw(&mut self, token: AccountId) {
+        // Get the sender balance
+        let sender_id = env::predecessor_account_id();
+        if let Some(b) = self
+            .token_balances
+            .get_mut(&token)
+            .unwrap_or_else(|| env::panic_str("Token not registered"))
+            .get_mut(&sender_id)
+        {
+            // Set the balance to zero
+            let refund = *b;
+            *b = 0;
+
+            // Send tokens back to the sender
+            fungible_token::ext(token)
+                .with_static_gas(CALL_GAS)
+                .ft_transfer(sender_id.clone(), U128::from(refund), None);
+
+            // Return excess of amount
+            self.refund_deposit_to_account(0, 0, sender_id.clone(), false);
+        } else {
+            // Fail otherwise
+            env::panic_str("Sender not registered");
+        }
+    }
 
     // TODO Shall this be payable as 1 yocto is needed for?
     pub fn drain(&mut self) {
@@ -1091,7 +1115,7 @@ impl ServiceRegistry {
             env::panic_str("Sender not registered");
         }
 
-        log!("Increased the token amount! {}", amount.0);
+//         log!("Increased the token amount! {}", amount.0);
 
         // No tokens will be returned
         PromiseOrValue::Value(U128::from(0))

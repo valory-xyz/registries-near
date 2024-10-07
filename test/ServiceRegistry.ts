@@ -606,8 +606,8 @@ test.only("Unbond after terminating the service with a token deposit", async t =
     let storage = await contract.view("get_storage_usage", {});
     console.log("Storage usage before activation:", storage);
 
-    let accountBalance = await contract.availableBalance();
-    console.log("Account balance before activation", accountBalance.toString());
+//    let accountBalance = await contract.availableBalance();
+//    console.log("Account balance before activation", accountBalance.toString());
 
     // Activate service agent registration
     await deployer.call(contract, "activate_registration", {
@@ -621,8 +621,8 @@ test.only("Unbond after terminating the service with a token deposit", async t =
     storage = await contract.view("get_storage_usage", {});
     console.log("Storage usage before registration:", storage);
 
-    accountBalance = await contract.availableBalance();
-    console.log("Account balance before registration", accountBalance.toString());
+//    accountBalance = await contract.availableBalance();
+//    console.log("Account balance before registration", accountBalance.toString());
 
     // Register operator
     await operator.call(contract, "storage_deposit", {
@@ -646,8 +646,8 @@ test.only("Unbond after terminating the service with a token deposit", async t =
     storage = await contract.view("get_storage_usage", {});
     console.log("Storage usage before terminate:", storage);
 
-    accountBalance = await contract.availableBalance();
-    console.log("Account balance before terminate", accountBalance.toString());
+//    accountBalance = await contract.availableBalance();
+//    console.log("Account balance before terminate", accountBalance.toString());
 
     // Terminate service
     await deployer.call(contract, "terminate", {
@@ -657,8 +657,8 @@ test.only("Unbond after terminating the service with a token deposit", async t =
     storage = await contract.view("get_storage_usage", {});
     console.log("Storage usage before unbond:", storage);
 
-    accountBalance = await contract.availableBalance();
-    console.log("Account balance before unbond", accountBalance.toString());
+//    accountBalance = await contract.availableBalance();
+//    console.log("Account balance before unbond", accountBalance.toString());
 
     // Check registry balance after registration activation
     let balance = await contract.view("get_registry_balance", {});
@@ -676,8 +676,8 @@ test.only("Unbond after terminating the service with a token deposit", async t =
     storage = await contract.view("get_storage_usage", {});
     console.log("Storage usage after unbond:", storage);
 
-    accountBalance = await contract.availableBalance();
-    console.log("Account balance after unbond", accountBalance.toString());
+//    accountBalance = await contract.availableBalance();
+//    console.log("Account balance after unbond", accountBalance.toString());
 
     // Check contract balance after registration
     balance = await contract.view("get_registry_balance", {});
