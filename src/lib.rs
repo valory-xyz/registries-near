@@ -1067,10 +1067,10 @@ impl ServiceRegistry {
 
     // Call by the operator
     #[payable]
-    pub fn storage_deposit(&mut self, token: AccountId) {
+    pub fn storage_deposit(&mut self, account_id: Option<AccountId>, token: AccountId) {
         let initial_storage_usage = env::storage_usage();
 
-        let account_id = env::predecessor_account_id();
+        let sender_id = account_id.unwrap_or_else(env::predecessor_account_id);
 
         // Check the token field and register account, if required
         // Initialize or get registered token map
@@ -1082,15 +1082,45 @@ impl ServiceRegistry {
             .or_insert(LookupMap::new(StorageKey::TokenBalances));
 
         // Check if the service owner is registered
-        if !token_balances.contains_key(&account_id) {
-            token_balances.set(account_id.clone(), Some(0));
+        if !token_balances.contains_key(&sender_id) {
+            token_balances.set(sender_id.clone(), Some(0));
             token_balances.flush();
         }
         self.token_balances.flush();
 
         let storage = env::storage_usage() - initial_storage_usage;
-        // Send the deposit back to the service owner
-        self.refund_deposit_to_account(storage, 0, account_id, true);
+        // Pay for the storage and refund excessive amount
+        self.refund_deposit_to_account(storage, 0, sender_id, true);
+    }
+
+    #[payable]
+    pub fn storage_withdraw(&mut self, token: AccountId) {
+        let initial_storage_usage = env::storage_usage();
+
+        let account_id = env::predecessor_account_id();
+
+        // Get the token balance
+        if let Some(b) = self
+            .token_balances
+            .get_mut(&token)
+            .unwrap_or_else(|| env::panic_str("Token not registered"))
+            .get_mut(&account_id)
+        {
+            // The balance must be zero
+            require!(*b == 0);
+
+        } else {
+            // Fail otherwise
+            env::panic_str("Sender not registered");
+        }
+
+        // Remove account storage associated with the token
+        self.token_balances.get_mut(&token).unwrap().remove(&account_id);
+        self.token_balances.flush();
+
+        let storage = initial_storage_usage - env::storage_usage();
+        // Send the storage released cost back to the sender
+        self.refund_deposit_to_account(storage, 0, account_id, false);
     }
 
     pub fn ft_on_transfer(
