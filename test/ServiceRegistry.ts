@@ -624,6 +624,10 @@ test.only("Unbond after terminating the service with a token deposit", async t =
 //    accountBalance = await contract.availableBalance();
 //    console.log("Account balance before registration", accountBalance.toString());
 
+    // Check token registry balance after registration activation
+    let balance = await token.view("ft_balance_of", {account_id: contract.accountId});
+    t.is(Number(balance), agentBonds[0]);
+
     // Register operator
     await operator.call(contract, "storage_deposit", {
         token: token.accountId
@@ -649,6 +653,10 @@ test.only("Unbond after terminating the service with a token deposit", async t =
 //    accountBalance = await contract.availableBalance();
 //    console.log("Account balance before terminate", accountBalance.toString());
 
+    // Check token registry balance after registering agent instances
+    balance = await token.view("ft_balance_of", {account_id: contract.accountId});
+    t.is(Number(balance), 2 * agentBonds[0]);
+
     // Terminate service
     await deployer.call(contract, "terminate", {
         service_id: serviceId,
@@ -659,10 +667,6 @@ test.only("Unbond after terminating the service with a token deposit", async t =
 
 //    accountBalance = await contract.availableBalance();
 //    console.log("Account balance before unbond", accountBalance.toString());
-
-    // Check registry balance after registration activation
-    let balance = await contract.view("get_registry_balance", {});
-    t.is(balance, agentBonds[0]);
 
     // Check that the service is in the TerminatedBonded state
     result = await contract.view("get_service_state", {service_id: serviceId});

@@ -527,14 +527,14 @@ impl ServiceRegistry {
         // Update service state
         service.state = ServiceState::ActiveRegistration;
 
-        // Update registry balance
         let security_deposit = service.security_deposit;
-        self.balance = self.balance.saturating_add(security_deposit.into());
 
         // Increased storage
 //         log!("storage usage after {}", env::storage_usage());
 
         if service.token.is_none() {
+            // Update registry native token balance
+            self.balance = self.balance.saturating_add(security_deposit.into());
             self.refund_deposit_to_account(0, security_deposit, env::predecessor_account_id(), true);
         } else {
             // Get token balance for the service owner and reduce it by a security deposit value
@@ -629,7 +629,6 @@ impl ServiceRegistry {
 
         // Update operator struct
         operator_data.balance = operator_data.balance.saturating_add(total_bond.into());
-        self.balance = self.balance.saturating_add(total_bond.into());
 
         service.agent_params.flush();
         service.operators.flush();
@@ -661,6 +660,9 @@ impl ServiceRegistry {
 
             // Security deposit is set to zero since it was deposited via token transfer already
             total_bond = 0;
+        } else {
+            // Update native token balance
+            self.balance = self.balance.saturating_add(total_bond.into());
         }
 
         // Consume storage and bond cost and refund the rest
