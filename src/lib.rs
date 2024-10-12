@@ -641,7 +641,7 @@ impl ServiceRegistry {
         let storage = env::storage_usage() - initial_storage_usage;
 
         if service.token.is_some() {
-            // Get token balance for the service owner and reduce it by a security deposit value
+            // Get token balance for the operator and reduce it by a total bond value
             if let Some(b) = self
                 .token_balances
                 .get_mut(&service.token.clone().unwrap())
