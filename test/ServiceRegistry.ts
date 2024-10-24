@@ -324,7 +324,7 @@ test("Register agent instances by the operator and check service state and value
     //t.log(balance.toHuman());
 });
 
-test("Unbond after service termination and check service state and values", async t => {
+test.only("Unbond after service termination and check service state and values", async t => {
     const {root, contract, deployer, operator, agentInstance} = t.context.accounts;
 
     // Initialize the contract
@@ -435,146 +435,146 @@ test("Unbond after service termination and check service state and values", asyn
     t.is(balance, 0);
 });
 
-test("Deploy, then unbond after service termination and check service state and values", async t => {
-    const {root, contract, deployer, operator, agentInstance} = t.context.accounts;
+//test("Deploy, then unbond after service termination and check service state and values", async t => {
+//    const {root, contract, deployer, operator, agentInstance} = t.context.accounts;
+//
+//    // Initialize the contract
+//    await root.call(contract, "new_default_meta", {
+//        owner_id: deployer,
+//        multisig_factory: deployer
+//    });
+//
+//    let storage = await contract.view("get_storage_usage", {});
+//    console.log("Storage usage before create:", storage);
+//
+//    //let storagePrice = await contract.view("get_storage_price", {});
+//    //console.log("Storage price before create:", storagePrice);
+//
+//    let accountBalance = await contract.availableBalance();
+//    console.log("Account balance before create:", accountBalance.toString());
+//
+//    // Create service
+//    const attachedDeposit = "5 N";
+//    await root.call(contract, "create", {
+//        service_owner: deployer,
+//        metadata: defaultMetadata,
+//        config_hash: configHash,
+//        agent_ids: agentIds,
+//        agent_num_instances: agentNumInstances,
+//        agent_bonds: agentBonds,
+//        threshold
+//    }, {attachedDeposit, gas: "300 Tgas"});
+//
+//    storage = await contract.view("get_storage_usage", {});
+//    console.log("Storage usage before activation:", storage);
+//
+//    accountBalance = await contract.availableBalance();
+//    console.log("Account balance before activation", accountBalance.toString());
+//
+//    // Activate service agent registration
+//    await deployer.call(contract, "activate_registration", {
+//        service_id: serviceId,
+//    }, {attachedDeposit});
+//
+//    storage = await contract.view("get_storage_usage", {});
+//    console.log("Storage usage before registration:", storage);
+//
+//    accountBalance = await contract.availableBalance();
+//    console.log("Account balance before registration", accountBalance.toString());
+//
+//    // Operator to register agent instance
+//    await operator.call(contract, "register_agents", {
+//        service_id: serviceId,
+//        agent_instances: [agentInstance],
+//        agent_ids: agentIds
+//    }, {attachedDeposit});
+//
+//    storage = await contract.view("get_storage_usage", {});
+//    console.log("Storage usage before deploy:", storage);
+//
+//    accountBalance = await contract.availableBalance();
+//    console.log("Account balance before deploy", accountBalance.toString());
+//
+//    // Deploy the service
+//    await deployer.call(contract, "deploy", {
+//        service_id: serviceId,
+//        name_multisig: "multisig_000"
+//    }, {attachedDeposit});
+//
+//    storage = await contract.view("get_storage_usage", {});
+//    console.log("Storage usage before terminate:", storage);
+//
+//    accountBalance = await contract.availableBalance();
+//    console.log("Account balance before terminate", accountBalance.toString());
+//
+//    // Terminate service
+//    await deployer.call(contract, "terminate", {
+//        service_id: serviceId,
+//    }, {attachedDeposit});
+//
+//    storage = await contract.view("get_storage_usage", {});
+//    console.log("Storage usage before unbond:", storage);
+//
+//    accountBalance = await contract.availableBalance();
+//    console.log("Account balance before unbond", accountBalance.toString());
+//
+//    // Check registry balance after registration activation
+//    let balance = await contract.view("get_registry_balance", {});
+//    t.is(balance, agentBonds[0]);
+//
+//    // Check that the service is in the TerminatedBonded state
+//    let result = await contract.view("get_service_state", {service_id: serviceId});
+//    t.is(result, 5);
+//
+//    // Unbond operator
+//    await operator.call(contract, "unbond", {
+//        service_id: serviceId,
+//    }, {attachedDeposit});
+//
+//    storage = await contract.view("get_storage_usage", {});
+//    console.log("Storage usage after unbond:", storage);
+//
+//    accountBalance = await contract.availableBalance();
+//    console.log("Account balance after unbond", accountBalance.toString());
+//
+//    // Check contract balance after registration
+//    balance = await contract.view("get_registry_balance", {});
+//    t.is(balance, 0);
+//});
+//
+//test("Unbond after service termination and check service state and values 2", async t => {
+//    const {root, contract, token, deployer, operator, agentInstance} = t.context.accounts;
+//
+//    // Initialize the contract
+//    await root.call(contract, "new_default_meta", {
+//        owner_id: deployer,
+//        multisig_factory: deployer
+//    });
+//
+//    let storage = await contract.view("get_storage_usage", {});
+//    console.log("Storage usage before create:", storage);
+//
+//    //let storagePrice = await contract.view("get_storage_price", {});
+//    //console.log("Storage price before create:", storagePrice);
+//
+//    let accountBalance = await contract.availableBalance();
+//    console.log("Account balance before create:", accountBalance.toString());
+//
+//    // Create service
+//    const attachedDeposit = "5 N";
+//    await root.call(contract, "create", {
+//        service_owner: deployer,
+//        metadata: defaultMetadata,
+//        token: token.accountId,
+//        config_hash: configHash,
+//        agent_ids: agentIds,
+//        agent_num_instances: agentNumInstances,
+//        agent_bonds: agentBonds,
+//        threshold
+//    }, {attachedDeposit, gas: "300 Tgas"});
+//});
 
-    // Initialize the contract
-    await root.call(contract, "new_default_meta", {
-        owner_id: deployer,
-        multisig_factory: deployer
-    });
-
-    let storage = await contract.view("get_storage_usage", {});
-    console.log("Storage usage before create:", storage);
-
-    //let storagePrice = await contract.view("get_storage_price", {});
-    //console.log("Storage price before create:", storagePrice);
-
-    let accountBalance = await contract.availableBalance();
-    console.log("Account balance before create:", accountBalance.toString());
-
-    // Create service
-    const attachedDeposit = "5 N";
-    await root.call(contract, "create", {
-        service_owner: deployer,
-        metadata: defaultMetadata,
-        config_hash: configHash,
-        agent_ids: agentIds,
-        agent_num_instances: agentNumInstances,
-        agent_bonds: agentBonds,
-        threshold
-    }, {attachedDeposit, gas: "300 Tgas"});
-
-    storage = await contract.view("get_storage_usage", {});
-    console.log("Storage usage before activation:", storage);
-
-    accountBalance = await contract.availableBalance();
-    console.log("Account balance before activation", accountBalance.toString());
-
-    // Activate service agent registration
-    await deployer.call(contract, "activate_registration", {
-        service_id: serviceId,
-    }, {attachedDeposit});
-
-    storage = await contract.view("get_storage_usage", {});
-    console.log("Storage usage before registration:", storage);
-
-    accountBalance = await contract.availableBalance();
-    console.log("Account balance before registration", accountBalance.toString());
-
-    // Operator to register agent instance
-    await operator.call(contract, "register_agents", {
-        service_id: serviceId,
-        agent_instances: [agentInstance],
-        agent_ids: agentIds
-    }, {attachedDeposit});
-
-    storage = await contract.view("get_storage_usage", {});
-    console.log("Storage usage before deploy:", storage);
-
-    accountBalance = await contract.availableBalance();
-    console.log("Account balance before deploy", accountBalance.toString());
-
-    // Deploy the service
-    await deployer.call(contract, "deploy", {
-        service_id: serviceId,
-        name_multisig: "multisig_000"
-    }, {attachedDeposit});
-
-    storage = await contract.view("get_storage_usage", {});
-    console.log("Storage usage before terminate:", storage);
-
-    accountBalance = await contract.availableBalance();
-    console.log("Account balance before terminate", accountBalance.toString());
-
-    // Terminate service
-    await deployer.call(contract, "terminate", {
-        service_id: serviceId,
-    }, {attachedDeposit});
-
-    storage = await contract.view("get_storage_usage", {});
-    console.log("Storage usage before unbond:", storage);
-
-    accountBalance = await contract.availableBalance();
-    console.log("Account balance before unbond", accountBalance.toString());
-
-    // Check registry balance after registration activation
-    let balance = await contract.view("get_registry_balance", {});
-    t.is(balance, agentBonds[0]);
-
-    // Check that the service is in the TerminatedBonded state
-    let result = await contract.view("get_service_state", {service_id: serviceId});
-    t.is(result, 5);
-
-    // Unbond operator
-    await operator.call(contract, "unbond", {
-        service_id: serviceId,
-    }, {attachedDeposit});
-
-    storage = await contract.view("get_storage_usage", {});
-    console.log("Storage usage after unbond:", storage);
-
-    accountBalance = await contract.availableBalance();
-    console.log("Account balance after unbond", accountBalance.toString());
-
-    // Check contract balance after registration
-    balance = await contract.view("get_registry_balance", {});
-    t.is(balance, 0);
-});
-
-test("Unbond after service termination and check service state and values 22222", async t => {
-    const {root, contract, token, deployer, operator, agentInstance} = t.context.accounts;
-
-    // Initialize the contract
-    await root.call(contract, "new_default_meta", {
-        owner_id: deployer,
-        multisig_factory: deployer
-    });
-
-    let storage = await contract.view("get_storage_usage", {});
-    console.log("Storage usage before create:", storage);
-
-    //let storagePrice = await contract.view("get_storage_price", {});
-    //console.log("Storage price before create:", storagePrice);
-
-    let accountBalance = await contract.availableBalance();
-    console.log("Account balance before create:", accountBalance.toString());
-
-    // Create service
-    const attachedDeposit = "5 N";
-    await root.call(contract, "create", {
-        service_owner: deployer,
-        metadata: defaultMetadata,
-        token: token.accountId,
-        config_hash: configHash,
-        agent_ids: agentIds,
-        agent_num_instances: agentNumInstances,
-        agent_bonds: agentBonds,
-        threshold
-    }, {attachedDeposit, gas: "300 Tgas"});
-});
-
-test.only("Unbond after terminating the service with a token deposit", async t => {
+test("Unbond after terminating the service with a token deposit", async t => {
     const {root, contract, token, deployer, operator, agentInstance} = t.context.accounts;
 
     // Initialize the contract

@@ -32,9 +32,7 @@ use near_sdk::ext_contract;
 //     account_id: AccountId,
 // }
 
-const CODE: &[u8] = include_bytes!("../artifacts/multisig2.wasm");
-
-#[derive(Serialize, Deserialize)]
+#[derive(Serialize, Deserialize, PartialEq)]
 #[serde(crate = "near_sdk::serde", untagged)]
 pub enum MultisigMember {
     AccessKey { public_key: Base58PublicKey },
@@ -735,41 +733,22 @@ impl ServiceRegistry {
         if multisig.is_none() || multisig.clone().unwrap() != name_multisig {
             // Create new multisig
             //log!("Calling external");
-            let multisig_account = format!("{}.{}", name_multisig, env::current_account_id());
-            Promise::new(multisig_account.parse().unwrap())
-                .create_account()
-                .deploy_contract(CODE.to_vec())
-                .transfer(env::attached_deposit())
-                .function_call(
-                    "new".to_string(),
-                    json!({ "members": agent_instances, "num_confirmations": service.threshold as u64 })
-                        .to_string()
-                        .as_bytes()
-                        .to_vec(),
-                    NearToken::from_yoctonear(0),
-                    env::prepaid_gas().saturating_sub(CALL_GAS),
+            multisig_factory::ext(self.multisig_factory.clone())
+                .with_static_gas(CREATE_CALL_GAS)
+                .with_attached_deposit(env::attached_deposit())
+                .create(name_multisig.clone(), agent_instances, service.threshold as u64)
+                .then(
+                    // Create a promise to callback create_multisig_callback
+                    Self::ext(env::current_account_id())
+                        .with_static_gas(CALL_GAS)
+                        .create_multisig_callback(service_id, name_multisig.clone())
                 )
-            .then(
-               // Create a promise to callback create_multisig_callback
-               Self::ext(env::current_account_id())
-                   .with_static_gas(CALL_GAS)
-                   .create_multisig_callback(service_id, name_multisig.clone())
-            )
-
-//             multisig_factory::ext(self.multisig_factory.clone())
-//                 .with_static_gas(CREATE_CALL_GAS)
-//                 .with_attached_deposit(env::attached_deposit())
-//                 .create(name_multisig.clone(), agent_instances, service.threshold as u64)
-//                 .then(
-//                    // Create a promise to callback create_multisig_callback
-//                    Self::ext(env::current_account_id())
-//                        .with_static_gas(CALL_GAS)
-//                        .create_multisig_callback(service_id, name_multisig.clone())
-//                 );
         } else {
+            // TODO Return attached deposit, if any
             // Update multisig with the new owners set
             // Get multisig owners
-            multisig2::ext(multisig.clone().unwrap().clone())
+            let full_multisig_name = format!("{}.{}", multisig.clone().unwrap(), self.multisig_factory);
+            multisig2::ext(full_multisig_name.parse().unwrap())
                 .with_static_gas(CALL_GAS)
                 .get_members()
                 // Compare multisig owners with the set of agent instances
@@ -822,15 +801,15 @@ impl ServiceRegistry {
         let service = self.services.get_mut(&service_id).unwrap();
 
         let mut success = false;
-//         // Check agent instances vs multisig members
-//         let multisig_members = call_result.unwrap();
-//         let matching = agent_instances.iter().zip(multisig_members.iter()).filter(|&(ai, mm)| ai == mm).count();
-//         //let matching = agent_instances.iter().zip(multisig_members.iter()).filter(|&(ai, mm)| match ai {MultisigMember::Account(value) => value == mm, _ => {false}}).count();
-//         if matching == agent_instances.len() && matching == multisig_members.len() {
-//             // Update service state
-//             service.state = ServiceState::Deployed;
-//             success = true;
-//         }
+        // Check agent instances vs multisig members
+        let multisig_members = call_result.unwrap();
+        let matching = agent_instances.iter().zip(multisig_members.iter()).filter(|&(ai, mm)| ai == mm).count();
+        //let matching = agent_instances.iter().zip(multisig_members.iter()).filter(|&(ai, mm)| match ai {MultisigMember::Account(value) => value == mm, _ => {false}}).count();
+        if matching == agent_instances.len() && matching == multisig_members.len() {
+            // Update service state
+            service.state = ServiceState::Deployed;
+            success = true;
+        }
 
         // Revert if the multisig members comparison fails
         require!(success);
@@ -1339,7 +1318,22 @@ impl Default for ServiceRegistry {
             slashed_funds: Default::default()
         }
     }
+
+//     /// This function can only be called from the factory or from the contract itself.
+//     #[init(ignore_state)]
+//     pub fn migrate(from_version: u32) -> Self {
+//         if from_version == 0 {
+//             // Adding icon as suggested here: https://nomicon.io/Standards/FungibleToken/Metadata.html
+//             let old_state: BridgeTokenV0 = env::state_read().expect("Contract isn't initialized");
+//             let new_state: BridgeToken = old_state.into();
+//             assert!(new_state.controller_or_self());
+//             new_state
+//         } else {
+//             env::state_read().unwrap()
+//         }
+//     }
 }
+
 
 // near_contract_standards::impl_non_fungible_token_core!(ServiceRegistry, tokens);
 // near_contract_standards::impl_non_fungible_token_approval!(ServiceRegistry, tokens);
