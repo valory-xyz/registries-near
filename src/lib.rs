@@ -730,11 +730,13 @@ impl ServiceRegistry {
             }
         }
 
-        // TODO: figure out if account is not a full name, but has dots
         let is_sub_account = name_multisig.is_sub_account_of(&self.multisig_factory);
         // Check if the multisig name is a full account of a factory, or a short name for the factory to create it with
         // If not a factory multisig name, create a new multisig instance
         if !is_sub_account {
+            // The multisig account must not have any predecessors
+            require!(name_multisig.get_parent_account_id().is_none());
+
             // Create new multisig
             //log!("Calling external");
             multisig_factory::ext(self.multisig_factory.clone())
