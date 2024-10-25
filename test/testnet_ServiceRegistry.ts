@@ -120,7 +120,7 @@ test("Deploy the service", async t => {
     const attachedDeposit = "5 N";
     await root.call(contract, "deploy", {
         service_id: serviceId,
-        name_multisig: "multisig_001"
+        name_multisig: "multisig_002"
     }, {attachedDeposit, gas: "300 Tgas"});
 
 
@@ -135,7 +135,7 @@ test("Re-deploy the service", async t => {
     // Re-deploy the service
     await root.call(contract, "deploy", {
         service_id: serviceId,
-        name_multisig: "multisig_001"
+        name_multisig: "multisig_002.multisignature2.testnet"
     }, {gas: "300 Tgas"});
 
     const storage = await contract.view("get_storage_usage", {});
@@ -187,6 +187,26 @@ test("Create service, activate registration and register agents", async t => {
         threshold
     }, {attachedDeposit});
 
+    // Activate service agent registration
+    await root.call(contract, "activate_registration", {
+        service_id: serviceId,
+    }, {attachedDeposit});
+
+    const agentInstance = root.getAccount("instance_000.sub_olas.olas_000.testnet");
+
+    // Operator to register agent instance
+    await root.call(contract, "register_agents", {
+        service_id: serviceId,
+        agent_instances: [agentInstance],
+        agent_ids: agentIds
+    }, {attachedDeposit});
+});
+
+test("Activate service registration and register agents", async t => {
+    const root = t.context.worker.rootAccount;
+    const contract = root.getAccount(contractName);
+
+    const attachedDeposit = "1 N";
     // Activate service agent registration
     await root.call(contract, "activate_registration", {
         service_id: serviceId,

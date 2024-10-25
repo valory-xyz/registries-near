@@ -717,6 +717,9 @@ impl ServiceRegistry {
         // Check if the service is already terminated
         require!(service.state == ServiceState::FinishedRegistration);
 
+        // Check account validity
+        require!(env::is_valid_account_id(name_multisig.as_bytes()));
+
         // Get all agent instances for the multisig
         let mut agent_instances = Vec::new();
         for ai in service.agent_ids.iter() {
@@ -727,10 +730,11 @@ impl ServiceRegistry {
             }
         }
 
-        // Check if the multisig is not set => the service was never deployed
-        // or if the multisig account does not the provided one => override current multisig with a new one
-        let multisig = &service.multisig;
-        if multisig.is_none() || multisig.clone().unwrap() != name_multisig {
+        // TODO: figure out if account is not a full name, but has dots
+        let is_sub_account = name_multisig.is_sub_account_of(&self.multisig_factory);
+        // Check if the multisig name is a full account of a factory, or a short name for the factory to create it with
+        // If not a factory multisig name, create a new multisig instance
+        if !is_sub_account {
             // Create new multisig
             //log!("Calling external");
             multisig_factory::ext(self.multisig_factory.clone())
@@ -744,11 +748,12 @@ impl ServiceRegistry {
                         .create_multisig_callback(service_id, name_multisig.clone())
                 )
         } else {
-            // TODO Return attached deposit, if any
+            // Deposit must be zero in this scenario
+            require!(env::attached_deposit() == NearToken::from_yoctonear(0), "Deposit is not required");
+
             // Update multisig with the new owners set
             // Get multisig owners
-            let full_multisig_name = format!("{}.{}", multisig.clone().unwrap(), self.multisig_factory);
-            multisig2::ext(full_multisig_name.parse().unwrap())
+            multisig2::ext(name_multisig.clone())
                 .with_static_gas(CALL_GAS)
                 .get_members()
                 // Compare multisig owners with the set of agent instances
@@ -756,7 +761,7 @@ impl ServiceRegistry {
                    // Create a promise to callback update_multisig_callback
                    Self::ext(env::current_account_id())
                        .with_static_gas(CALL_GAS)
-                       .update_multisig_callback(service_id, agent_instances)
+                       .update_multisig_callback(service_id, name_multisig.clone(), agent_instances)
                 )
         }
     }
@@ -787,6 +792,7 @@ impl ServiceRegistry {
     pub fn update_multisig_callback(
         &mut self,
         service_id: u32,
+        name_multisig: AccountId,
         agent_instances: Vec<MultisigMember>,
         #[callback_result] call_result: Result<Vec<MultisigMember>, PromiseError>,
     ) -> bool {
@@ -806,6 +812,7 @@ impl ServiceRegistry {
         let matching = agent_instances.iter().zip(multisig_members.iter()).filter(|&(ai, mm)| ai == mm).count();
         //let matching = agent_instances.iter().zip(multisig_members.iter()).filter(|&(ai, mm)| match ai {MultisigMember::Account(value) => value == mm, _ => {false}}).count();
         if matching == agent_instances.len() && matching == multisig_members.len() {
+            service.multisig = Some(name_multisig);
             // Update service state
             service.state = ServiceState::Deployed;
             success = true;
