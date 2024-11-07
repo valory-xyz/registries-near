@@ -4,15 +4,15 @@ use near_contract_standards::non_fungible_token::metadata::{
 use near_contract_standards::non_fungible_token::enumeration::NonFungibleTokenEnumeration;
 use near_contract_standards::non_fungible_token::{NonFungibleToken, Token};
 use near_sdk::borsh::{self, BorshDeserialize, BorshSerialize};
-use near_sdk::serde::{self, Serialize, Deserialize};
-use near_sdk::json_types::{Base64VecU8, U128};
+use near_sdk::serde::{Serialize, Deserialize};
+use near_sdk::json_types::{Base64VecU8, U128, Base58PublicKey};
 use near_sdk::serde_json::json;
 use near_sdk::collections::LazyOption;
 use near_sdk::{
-    env, near_bindgen, require, AccountId, BorshStorageKey, PanicOnDefault, Promise, PromiseOrValue, StorageUsage, Gas,
-    PromiseError
+    env, near, require, AccountId, BorshStorageKey, PanicOnDefault, Promise, PromiseOrValue, StorageUsage, Gas,
+    IntoStorageKey, PromiseError, NearToken, log
 };
-use near_sdk::collections::{LookupMap, Vector};
+use near_sdk::store::{LookupMap, Vector};
 use near_sdk::ext_contract;
 //use near_account_id::{AccountId};
 //near_token::NearToken
@@ -25,6 +25,20 @@ use near_sdk::ext_contract;
 // const CURRENT_STATE_VERSION: u32 = 1;
 // const TGAS: u64 = 1_000_000_000_000;
 
+// #[near(serializers=[borsh])]
+// #[derive(Clone, Serialize, Deserialize)]
+// #[serde(crate = "near_sdk::serde", untagged)]
+// pub struct MutisigAccountMember {
+//     account_id: AccountId,
+// }
+
+#[derive(Serialize, Deserialize, PartialEq)]
+#[serde(crate = "near_sdk::serde", untagged)]
+pub enum MultisigMember {
+    AccessKey { public_key: Base58PublicKey },
+    Account { account_id: AccountId },
+}
+
 // MultisigFactory interface
 #[ext_contract(multisig_factory)]
 trait MultisigFactory {
@@ -32,19 +46,27 @@ trait MultisigFactory {
     fn create(
         &mut self,
         name: AccountId,
-        members: Vec<AccountId>,
+        members: Vec<MultisigMember>,
         num_confirmations: u64,
     ) -> Promise;
 }
 
+
 // Multisig2 interface
 #[ext_contract(multisig2)]
 trait Multisig2 {
-    fn get_members(&self) -> Vec<AccountId>;
+    fn get_members(&self) -> Vec<MultisigMember>;
+}
+
+// FungibleToken interface
+#[ext_contract(fungible_token)]
+trait FungibleToken {
+    fn ft_transfer(&mut self, receiver_id: AccountId, amount: U128, memo: Option<String>);
 }
 
 
-#[derive(BorshDeserialize, BorshSerialize, PartialEq)]
+#[near(serializers=[borsh])]
+#[derive(PartialEq, Clone)]
 pub enum ServiceState {
     NonExistent,
     PreRegistration,
@@ -54,24 +76,20 @@ pub enum ServiceState {
     TerminatedBonded
 }
 
-//#[near_bindgen]
-#[derive(BorshDeserialize, BorshSerialize, PanicOnDefault)]
-//#[near(serializers = [json, borsh])]
+#[near(serializers=[borsh])]
 pub struct AgentParams {
     pub num_agent_instances: u32,
     pub bond: u128,
     pub instances: Vector<AccountId>
 }
 
-//#[near_bindgen]
-#[derive(BorshDeserialize, BorshSerialize, PanicOnDefault)]
+#[near(serializers=[borsh])]
 pub struct OperatorData {
     pub balance: u128,
     pub instances: Vector<AccountId>
 }
 
-//#[near_bindgen]
-#[derive(BorshDeserialize, BorshSerialize, PanicOnDefault)]
+#[near(serializers=[borsh])]
 pub struct Service {
     // Service token
     pub token: Option<AccountId>,
@@ -102,25 +120,27 @@ pub struct Service {
     pub operators: LookupMap<AccountId, OperatorData>
 }
 
-const TGAS: u64 = 1_000_000_000_000;
-const CREATE_CALL_GAS: u64 = 50_000_000_000_000;
+const CALL_GAS: Gas = Gas::from_tgas(5);
+const CREATE_CALL_GAS: Gas = Gas::from_tgas(100);
 
-#[near_bindgen]
-#[derive(BorshDeserialize, BorshSerialize, PanicOnDefault)]
+#[near(contract_state)]
 pub struct ServiceRegistry {
     owner: AccountId,
     services: LookupMap<u32, Service>,
     tokens: NonFungibleToken,
     metadata: LazyOption<NFTContractMetadata>,
+    token_balances: LookupMap<AccountId, LookupMap<AccountId, u128>>,
     agent_instance_operators: LookupMap<AccountId, AccountId>,
-    slashed_funds: u128,
     paused: bool,
-    multisig_factory: AccountId
+    multisig_factory: AccountId,
+    balance: u128,
+    slashed_funds: u128
 }
 
 const DATA_IMAGE_SVG_NEAR_ICON: &str = "data:image/svg+xml,%3Csvg xmlns='http://www.w3.org/2000/svg' viewBox='0 0 288 288'%3E%3Cg id='l' data-name='l'%3E%3Cpath d='M187.58,79.81l-30.1,44.69a3.2,3.2,0,0,0,4.75,4.2L191.86,103a1.2,1.2,0,0,1,2,.91v80.46a1.2,1.2,0,0,1-2.12.77L102.18,77.93A15.35,15.35,0,0,0,90.47,72.5H87.34A15.34,15.34,0,0,0,72,87.84V201.16A15.34,15.34,0,0,0,87.34,216.5h0a15.35,15.35,0,0,0,13.08-7.31l30.1-44.69a3.2,3.2,0,0,0-4.75-4.2L96.14,186a1.2,1.2,0,0,1-2-.91V104.61a1.2,1.2,0,0,1,2.12-.77l89.55,107.23a15.35,15.35,0,0,0,11.71,5.43h3.13A15.34,15.34,0,0,0,216,201.16V87.84A15.34,15.34,0,0,0,200.66,72.5h0A15.35,15.35,0,0,0,187.58,79.81Z'/%3E%3C/g%3E%3C/svg%3E";
 
-#[derive(BorshSerialize, BorshStorageKey)]
+#[derive(BorshStorageKey, BorshSerialize)]
+#[borsh(crate = "near_sdk::borsh")]
 enum StorageKey {
     NonFungibleToken,
     Metadata,
@@ -134,10 +154,12 @@ enum StorageKey {
     AgentInstancePerAgentId,
     ConfigHash,
     OperatorData,
-    AgentInstanceOperator
+    AgentInstanceOperator,
+    CustomToken,
+    TokenBalances
 }
 
-#[near_bindgen]
+#[near]
 impl ServiceRegistry {
     /// Initializes the contract owned by `owner_id` with
     /// default metadata (for example purposes only).
@@ -174,26 +196,35 @@ impl ServiceRegistry {
             ),
             metadata: LazyOption::new(StorageKey::Metadata, Some(&metadata)),
             agent_instance_operators: LookupMap::new(StorageKey::AgentInstanceOperator),
-            slashed_funds: 0 as u128,
+            token_balances: LookupMap::new(StorageKey::CustomToken),
             paused: false,
-            multisig_factory
+            multisig_factory,
+            balance: 0 as u128,
+            slashed_funds: 0 as u128
         }
     }
 
-    fn refund_deposit_to_account(&self, storage_used: u64, deposit_used: u128, account_id: AccountId, deposit_in: bool) {
-        let mut refund: u128 = 0;
+    fn refund_deposit_to_account(&self, storage_used: u64, service_deposit: u128, account_id: AccountId, deposit_in: bool) {
+        log!("storage used: {}", storage_used);
+        let near_deposit = NearToken::from_yoctonear(service_deposit);
         let mut required_cost = env::storage_byte_cost().saturating_mul(storage_used.into());
+        required_cost = required_cost.saturating_add(near_deposit);
+
+        let mut refund = env::attached_deposit();
+        // Deposit is added on a balance
         if deposit_in {
-            required_cost = required_cost.saturating_add(deposit_used.into());
+            // Required cost must not be bigger than the attached deposit
+            require!(required_cost <= refund);
+            refund = refund.saturating_sub(required_cost);
         } else {
-            refund = refund.saturating_add(deposit_used.into());
+            // This could be the case if the storage price went up during the lifespan of the service
+            require!(required_cost <= env::account_balance());
+            refund = refund.saturating_add(required_cost);
         }
-        let attached_deposit = env::attached_deposit();
-
-        require!(required_cost <= attached_deposit);
-
-        refund += attached_deposit.saturating_sub(required_cost);
-        if refund > 1 {
+        //log!("required cost: {}", required_cost.as_yoctonear());
+        log!("refund: {}", refund.as_yoctonear());
+        log!("balance: {}", env::account_balance().as_yoctonear());
+        if refund.as_yoctonear() > 1 {
             Promise::new(account_id).transfer(refund);
         }
     }
@@ -203,7 +234,7 @@ impl ServiceRegistry {
         require!(self.owner == env::predecessor_account_id());
 
         // Check account validity
-        require!(env::is_valid_account_id(new_owner.as_ref().as_bytes()));
+        require!(env::is_valid_account_id(new_owner.as_bytes()));
 
         self.owner = new_owner;
 
@@ -217,6 +248,11 @@ impl ServiceRegistry {
         agent_num_instances: Vec<u32>,
         agent_bonds: Vec<u128>
     ) {
+        // Check array lengths
+        require!(agent_ids.len() > 0);
+        require!(agent_ids.len() == agent_bonds.len());
+        require!(agent_ids.len() == agent_num_instances.len());
+
         // Check config hash
         require!(!config_hash.into_iter().all(|h| h == 0));
 
@@ -227,17 +263,15 @@ impl ServiceRegistry {
         require!(check_agent_ids.len() == agent_ids.len());
         //let v: Vec<_> = agent_ids.into_iter().unique().collect();
 
-        // Check array lengths
-        require!(agent_ids.len() == agent_bonds.len());
-        require!(agent_ids.len() == agent_num_instances.len());
-
         // Check non-zero agent Ids
         require!(agent_ids.into_iter().all(|id| id > 0));
     }
 
     fn fill_service_params(
         &mut self,
+        service_owner: AccountId,
         service_id: u32,
+        token: Option<AccountId>,
         config_hash: [u8; 32],
         agent_ids: Vec<u32>,
         agent_num_instances: Vec<u32>,
@@ -245,7 +279,7 @@ impl ServiceRegistry {
         threshold: u32
     ) {
         // Get the service
-        let mut service = self.services.get(&service_id).unwrap();
+        let service = self.services.get_mut(&service_id).unwrap();
 
         // Check the service state
         require!(service.state == ServiceState::PreRegistration);
@@ -260,11 +294,11 @@ impl ServiceRegistry {
 
             // Ignore zero agent params, as it is the case for the service update
             if agent_num_instances[i] > 0 && agent_bonds[i] > 0 {
-                service.agent_ids.push(&agent_id);
+                service.agent_ids.push(agent_id);
 
                 service.agent_params.insert(
-                    &agent_id,
-                    &AgentParams{
+                    agent_id,
+                    AgentParams{
                         num_agent_instances: agent_num_instances[i],
                         bond: agent_bonds[i],
                         instances: Vector::new(StorageKey::AgentInstancePerAgentId)
@@ -283,9 +317,31 @@ impl ServiceRegistry {
                 service.agent_params.remove(&agent_id);
             }
         }
+        // Record the state of collections
+        service.agent_ids.flush();
+        service.agent_params.flush();
 
         service.security_deposit = security_deposit;
         service.max_num_agent_instances = max_num_agent_instances;
+
+        // Check the token field and register the service owner, if required
+        if token.is_some() && token != service.token {
+            // Initialize or get registered token map
+            let token_balances = self
+                .token_balances
+                // Get token map
+                .entry(token.clone().unwrap())
+                // or create a new one if not
+                .or_insert(LookupMap::new(StorageKey::TokenBalances));
+
+            // Check if the service owner is registered
+            if !token_balances.contains_key(&service_owner) {
+                token_balances.set(service_owner, Some(0));
+                token_balances.flush();
+            }
+            self.token_balances.flush();
+            service.token = token;
+        }
 
         // Check for the correct threshold: no less than ceil((n * 2 + 1) / 3) of all the agent instances combined
         let mut check_threshold = max_num_agent_instances * 2 + 1;
@@ -308,7 +364,8 @@ impl ServiceRegistry {
 
         // If the config hash is different, push it to the list of configs
         if !equal {
-            service.config_hashes.push(&config_hash);
+            service.config_hashes.push(config_hash);
+            service.config_hashes.flush();
         }
     }
 
@@ -326,8 +383,6 @@ impl ServiceRegistry {
     ) -> bool {
         // Record current storage usage
         let initial_storage_usage = env::storage_usage();
-
-        let config_hash: [u8; 32] = [42; 32];
 
         // TODO Check other fields?
         // Number of copies must be equal to one
@@ -347,12 +402,12 @@ impl ServiceRegistry {
 
         // Mint new service
         // This function is used such that the storage calculation is not engaged and deposit is not refunded
-        self.tokens.internal_mint_with_refund(service_id.to_string().clone(), service_owner, Some(metadata), None);
+        self.tokens.internal_mint_with_refund(service_id.to_string().clone(), service_owner.clone(), Some(metadata), None);
 
         // Allocate the service
         self.services.insert(
-            &service_id,
-            &Service {
+            service_id,
+            Service {
                 // TODO: change with just token when other tokens are enabled
                 token: None,
                 security_deposit: 0,
@@ -371,15 +426,21 @@ impl ServiceRegistry {
 
         // Fill in the service parameters
         self.fill_service_params(
+            service_owner,
             service_id,
+            token,
             config_hash,
             agent_ids.clone(),
             agent_num_instances.clone(),
             agent_bonds.clone(),
             threshold
         );
+        // Record service map state
+        self.services.flush();
 
         // Increased storage
+//         log!("initial storage usage {}", initial_storage_usage);
+//         log!("storage usage after {}", env::storage_usage());
         let storage = env::storage_usage() - initial_storage_usage;
         self.refund_deposit_to_account(storage, 0, env::predecessor_account_id(), true);
 
@@ -410,7 +471,9 @@ impl ServiceRegistry {
             .unwrap_or_else(|| env::panic_str("Service not found"));
         require!(env::predecessor_account_id() == owner_id, "Predecessor must be token owner.");
 
-        // TODO: Check that all current agent ids are updated / removes
+        // Check that all current agent ids are updated / removed to correspond the CRUD way
+        let service = self.services.get(&service_id).unwrap();
+        require!(service.agent_ids.iter().all(|ai| agent_ids.contains(ai)), "Not all agent Ids are updated");
 
         self.check_service_params(
             config_hash,
@@ -421,7 +484,9 @@ impl ServiceRegistry {
 
         // Fill in the service parameters
         self.fill_service_params(
+            owner_id,
             service_id,
+            token,
             config_hash,
             agent_ids.clone(),
             agent_num_instances.clone(),
@@ -439,30 +504,54 @@ impl ServiceRegistry {
     #[payable]
     pub fn activate_registration(
         &mut self,
-        service_id: u32
+        service_id: u32,
+        account_id: Option<AccountId>
     ) {
+        let service_owner = account_id.unwrap_or_else(env::predecessor_account_id);
+
         // Check for service owner
         let owner_id = self.tokens
             .owner_by_id
             .get(&service_id.to_string())
             .unwrap_or_else(|| env::panic_str("Service not found"));
-        require!(env::predecessor_account_id() == owner_id, "Predecessor must be token owner.");
-
-        // Record current storage usage
-        let initial_storage_usage = env::storage_usage();
+        require!(service_owner == owner_id, "Predecessor must be token owner.");
 
         // Get the service
-        let mut service = self.services.get(&service_id).unwrap();
+        let service = self.services.get_mut(&service_id).unwrap();
 
         // Check the service state
         require!(service.state == ServiceState::PreRegistration);
 
+        // Update service state
         service.state = ServiceState::ActiveRegistration;
 
+        let security_deposit = service.security_deposit;
+
         // Increased storage
-        // TODO: check if this is zero, as no storage is supposedly increased
-        let storage = env::storage_usage() - initial_storage_usage;
-        self.refund_deposit_to_account(storage, service.security_deposit, env::predecessor_account_id(), true);
+//         log!("storage usage after {}", env::storage_usage());
+
+        if service.token.is_none() {
+            // Update registry native token balance
+            self.balance = self.balance.saturating_add(security_deposit.into());
+            self.refund_deposit_to_account(0, security_deposit, env::predecessor_account_id(), true);
+        } else {
+            // Get token balance for the service owner and reduce it by a security deposit value
+            if let Some(b) = self
+                .token_balances
+                .get_mut(&service.token.clone().unwrap())
+                .unwrap_or_else(|| env::panic_str("Token not registered"))
+                .get_mut(&owner_id)
+            {
+                // Decrease by the security deposit amount
+                if *b < security_deposit {
+                    env::panic_str("Not enough token deposit");
+                }
+                *b -= security_deposit;
+            } else {
+                // Fail otherwise
+                env::panic_str("Sender not registered");
+            }
+        }
 
         // TODO: event
     }
@@ -484,45 +573,45 @@ impl ServiceRegistry {
 
         // Get the service
         // TODO Check if service id exists?
-        let mut service = self.services.get(&service_id).unwrap();
+        let service = self.services.get_mut(&service_id).unwrap();
 
         // Check the service state
         require!(service.state == ServiceState::ActiveRegistration);
 
         // Initialize or get operator struct
-        let mut operator_data = OperatorData{
-            balance: 0 as u128,
-            instances: Vector::new(StorageKey::AgentInstance)
-        };
-        match service.operators.get(&operator) {
-            Some(v) => operator_data = v,
-            None => {},
-        }
+        let operator_data = service
+            .operators
+            // Get operator struct
+            .entry(operator.clone())
+            // or create a new one if not
+            .or_insert(OperatorData{
+                balance: 0 as u128,
+                instances: Vector::new(StorageKey::AgentInstance)
+            });
 
         // Traverse agent instances and corresponding agent ids
         let mut total_bond = 0 as u128;
         for i in 0..agent_ids.len() {
-            let agent_id = agent_ids[i];
-            let agent_instance = agent_instances[i].clone();
-
             // Operator address must be different from agent instance one
-            require!(operator != agent_instance);
+            require!(operator != agent_instances[i]);
 
             // Check account validity
-            require!(env::is_valid_account_id(agent_instance.as_ref().as_bytes()));
+            require!(env::is_valid_account_id(agent_instances[i].as_bytes()));
 
             // Check if there is an empty slot for the agent instance in this specific service
-            let mut agent_params = service.agent_params.get(&agent_id).unwrap();
+            let agent_params = service.agent_params.get_mut(&agent_ids[i]).unwrap();
             require!(agent_params.num_agent_instances > agent_params.instances.len() as u32);
 
             // Check that the agent instance address is unique across all services
-            let res = self.agent_instance_operators.insert(&agent_instance, &operator);
+            let res = self.agent_instance_operators.insert(agent_instances[i].clone(), operator.clone());
             require!(res.is_none());
 
             // Add agent instance into corresponding maps
-            agent_params.instances.push(&agent_instance);
-            operator_data.instances.push(&agent_instance);
-            service.agent_instances.insert(&agent_instance, &agent_id);
+            agent_params.instances.push(agent_instances[i].clone());
+            agent_params.instances.flush();
+            operator_data.instances.push(agent_instances[i].clone());
+            operator_data.instances.flush();
+            service.agent_instances.insert(agent_instances[i].clone(), agent_ids[i]);
 
             // Increase the total number of agent instances in a service
             service.num_agent_instances += 1;
@@ -539,12 +628,73 @@ impl ServiceRegistry {
         // Update operator struct
         operator_data.balance = operator_data.balance.saturating_add(total_bond.into());
 
+        service.agent_params.flush();
+        service.operators.flush();
+        service.agent_instances.flush();
+        self.agent_instance_operators.flush();
+
         // Increased storage
+//         log!("initial storage usage {}", initial_storage_usage);
+//         log!("storage usage after {}", env::storage_usage());
         let storage = env::storage_usage() - initial_storage_usage;
+
+        if service.token.is_some() {
+            // Get token balance for the operator and reduce it by a total bond value
+            if let Some(b) = self
+                .token_balances
+                .get_mut(&service.token.clone().unwrap())
+                .unwrap_or_else(|| env::panic_str("Token not registered"))
+                .get_mut(&operator)
+            {
+                // Decrease by the security deposit amount
+                if *b < total_bond {
+                    env::panic_str("Not enough token deposit");
+                }
+                *b -= total_bond;
+            } else {
+                // Fail otherwise
+                env::panic_str("Sender not registered");
+            }
+
+            // Security deposit is set to zero since it was deposited via token transfer already
+            total_bond = 0;
+        } else {
+            // Update native token balance
+            self.balance = self.balance.saturating_add(total_bond.into());
+        }
+
         // Consume storage and bond cost and refund the rest
         self.refund_deposit_to_account(storage, total_bond, env::predecessor_account_id(), true);
 
         // TODO: event
+    }
+
+    pub fn get_multisig_members(&self, name_multisig: AccountId) -> Promise {
+        // Update multisig with the new owners set
+        // Get multisig owners
+        multisig2::ext(name_multisig)
+            .with_static_gas(CALL_GAS)
+            .get_members()
+            // Compare multisig owners with the set of agent instances
+            .then(
+               // Create a promise to callback update_multisig_callback
+               Self::ext(env::current_account_id())
+                   .with_static_gas(CALL_GAS)
+                   .check_members()
+            )
+    }
+
+    #[private]
+    pub fn check_members(
+        &self,
+        #[callback_result] call_result: Result<Vec<MultisigMember>, PromiseError>,
+    ) -> u64 {
+        // Check if the promise succeeded by calling the method outlined in external.rs
+        if call_result.is_err() {
+            env::panic_str("Multisig check failed");
+        }
+
+        call_result.unwrap().len() as u64
     }
 
     // TODO: needs to be payable?
@@ -553,7 +703,7 @@ impl ServiceRegistry {
         &mut self,
         service_id: u32,
         name_multisig: AccountId
-    ) {
+    ) -> Promise {
         // Check for service owner
         let owner_id = self.tokens
             .owner_by_id
@@ -567,59 +717,73 @@ impl ServiceRegistry {
         // Check if the service is already terminated
         require!(service.state == ServiceState::FinishedRegistration);
 
+        // Check account validity
+        require!(env::is_valid_account_id(name_multisig.as_bytes()));
+
         // Get all agent instances for the multisig
         let mut agent_instances = Vec::new();
-        for a in service.agent_ids.iter() {
-            agent_instances.extend(service.agent_params.get(&a).unwrap().instances.iter());
+        for ai in service.agent_ids.iter() {
+            //agent_instances.extend(service.agent_params.get(ai).unwrap().instances.iter().cloned());
+            let instances = &service.agent_params.get(ai).unwrap().instances;
+            for inst in instances.iter() {
+                agent_instances.push(MultisigMember::Account{account_id: inst.clone()});
+            }
         }
 
-        // Check if the multisig is not set => the service was never deployed
-        // or if the multisig account does not the provided one => override current multisig with a new one
-        let multisig = service.multisig;
-        if multisig.is_none() || multisig.clone().unwrap() != name_multisig {
+        let is_sub_account = name_multisig.is_sub_account_of(&self.multisig_factory);
+        // Check if the multisig name is a full account of a factory, or a short name for the factory to create it with
+        // If not a factory multisig name, create a new multisig instance
+        if !is_sub_account {
+            // The multisig account must not have any predecessors
+            require!(name_multisig.get_parent_account_id().is_none());
+
             // Create new multisig
             //log!("Calling external");
-            // Create a promise to call TestToken.is_paused()
-            let promise = multisig_factory::ext(self.multisig_factory.clone())
-                .with_static_gas(Gas(CREATE_CALL_GAS))
+            multisig_factory::ext(self.multisig_factory.clone())
+                .with_static_gas(CREATE_CALL_GAS)
                 .with_attached_deposit(env::attached_deposit())
-                .create(name_multisig.clone(), agent_instances.clone(), service.threshold as u64)
+                .create(name_multisig.clone(), agent_instances, service.threshold as u64)
                 .then(
-                   // Create a promise to callback create_multisig_callback
-                   Self::ext(env::current_account_id())
-                       .with_static_gas(Gas(5 * TGAS))
-                       .create_multisig_callback(service_id, name_multisig.clone())
-                );
+                    // Create a promise to callback create_multisig_callback
+                    Self::ext(env::current_account_id())
+                        .with_static_gas(CALL_GAS)
+                        .create_multisig_callback(service_id, name_multisig.clone())
+                )
         } else {
+            // Deposit must be zero in this scenario
+            require!(env::attached_deposit() == NearToken::from_yoctonear(0), "Deposit is not required");
+
             // Update multisig with the new owners set
             // Get multisig owners
-            multisig2::ext(multisig.unwrap().clone())
-                .with_static_gas(Gas(5 * TGAS))
+            multisig2::ext(name_multisig.clone())
+                .with_static_gas(CALL_GAS)
                 .get_members()
                 // Compare multisig owners with the set of agent instances
                 .then(
                    // Create a promise to callback update_multisig_callback
                    Self::ext(env::current_account_id())
-                       .with_static_gas(Gas(5 * TGAS))
-                       .update_multisig_callback(service_id, agent_instances.clone())
-                );
+                       .with_static_gas(CALL_GAS)
+                       .update_multisig_callback(service_id, name_multisig.clone(), agent_instances)
+                )
         }
     }
 
     #[private] // Public - but only callable by env::current_account_id()
     pub fn create_multisig_callback(
-        &self,
+        &mut self,
         service_id: u32,
         name_multisig: AccountId,
         #[callback_result] call_result: Result<(), PromiseError>,
     ) {
         // Check if the promise succeeded by calling the method outlined in external.rs
         if call_result.is_err() {
-            //log!("There was an error contacting Hello NEAR");
+            env::panic_str("Multisig creation failed");
+
+            // TODO refund
         }
 
         // Get the service, record its multisig and update state
-        let mut service = self.services.get(&service_id).unwrap();
+        let service = self.services.get_mut(&service_id).unwrap();
         service.multisig = Some(name_multisig);
         service.state = ServiceState::Deployed;
 
@@ -628,24 +792,29 @@ impl ServiceRegistry {
 
     #[private]
     pub fn update_multisig_callback(
-        &self,
+        &mut self,
         service_id: u32,
-        agent_instances: Vec<AccountId>,
-        #[callback_result] call_result: Result<Vec<AccountId>, PromiseError>,
+        name_multisig: AccountId,
+        agent_instances: Vec<MultisigMember>,
+        #[callback_result] call_result: Result<Vec<MultisigMember>, PromiseError>,
     ) -> bool {
         // Check if the promise succeeded by calling the method outlined in external.rs
         if call_result.is_err() {
-            //log!("There was an error contacting Hello NEAR");
+            env::panic_str("Multisig update failed");
+
+            // TODO refund
         }
 
         // Get the service, record its multisig and update state
-        let mut service = self.services.get(&service_id).unwrap();
+        let service = self.services.get_mut(&service_id).unwrap();
 
+        let mut success = false;
         // Check agent instances vs multisig members
         let multisig_members = call_result.unwrap();
         let matching = agent_instances.iter().zip(multisig_members.iter()).filter(|&(ai, mm)| ai == mm).count();
-        let mut success = false;
+        //let matching = agent_instances.iter().zip(multisig_members.iter()).filter(|&(ai, mm)| match ai {MultisigMember::Account(value) => value == mm, _ => {false}}).count();
         if matching == agent_instances.len() && matching == multisig_members.len() {
+            service.multisig = Some(name_multisig);
             // Update service state
             service.state = ServiceState::Deployed;
             success = true;
@@ -670,17 +839,14 @@ impl ServiceRegistry {
         // Check array lengths
         require!(amounts.len() == agent_instances.len());
 
-        // Record current storage usage
-        let initial_storage_usage = env::storage_usage();
-
         // Get the service
-        let service = self.services.get(&service_id).unwrap();
+        let service = self.services.get_mut(&service_id).unwrap();
 
         // Check if the service is already terminated
         require!(service.state == ServiceState::Deployed);
 
         // Only the multisig of a correspondent address can slash its agent instances
-        require!(service.multisig.unwrap() == env::predecessor_account_id());
+        require!(service.multisig.clone().unwrap() == env::predecessor_account_id());
 
         // Traverse all agent instances
         for i in 0..agent_instances.len() {
@@ -689,7 +855,7 @@ impl ServiceRegistry {
 
             // Get the operator and its balance
             let operator = self.agent_instance_operators.get(&agent_instance).unwrap();
-            let mut operator_data = service.operators.get(&operator).unwrap();
+            let operator_data = service.operators.get_mut(operator).unwrap();
             let mut balance = operator_data.balance;
 
             // Slash the balance of the operator, make sure it does not go below zero
@@ -707,11 +873,6 @@ impl ServiceRegistry {
 
             // TODO event
         }
-
-        // Increased storage
-        let storage = env::storage_usage() - initial_storage_usage;
-        // TODO this is probably not needed as no storage is affected
-        self.refund_deposit_to_account(storage, 0, env::predecessor_account_id(), true);
     }
 
     // TODO: needs to be payable?
@@ -731,7 +892,7 @@ impl ServiceRegistry {
         let initial_storage_usage = env::storage_usage();
 
         // Get the service
-        let mut service = self.services.get(&service_id).unwrap();
+        let service = self.services.get_mut(&service_id).unwrap();
 
         // Check if the service is already terminated
         require!(service.state != ServiceState::PreRegistration && service.state != ServiceState::TerminatedBonded);
@@ -745,17 +906,33 @@ impl ServiceRegistry {
 
         // Remove agent instances data from agent params
         for a in service.agent_ids.iter() {
-            service.agent_params.get(&a).unwrap().instances.clear();
+            let instances = &mut service.agent_params.get_mut(a).unwrap().instances;
+            instances.clear();
+            instances.flush();
         }
-        
-        // TODO: Calculate refund of freed storage
 
-        // Increased storage
-        // TODO: check if this is zero, as no storage is supposedly increased
-        // TODO: This will mostly likely fail as the storage must decrease
-        let storage = env::storage_usage() - initial_storage_usage;
+        // Update registry balance
+        let mut refund = service.security_deposit;
+        self.balance = self.balance.saturating_sub(refund.into());
+
+        // TODO: Calculate refund of freed storage
+        //log!("initial storage usage {}", initial_storage_usage);
+        //log!("storage usage after {}", env::storage_usage());
+
+        if service.token.is_some() {
+            // Send the token refund back to the service owner
+            fungible_token::ext(service.token.clone().unwrap())
+                .with_static_gas(CALL_GAS)
+                .ft_transfer(owner_id, U128::from(refund), None);
+
+            // Zero the refund since it has been already sent back
+            refund = 0;
+        }
+
+        // Decreased storage
+        let storage = initial_storage_usage - env::storage_usage();
         // Send the deposit back to the service owner
-        self.refund_deposit_to_account(storage, service.security_deposit, env::predecessor_account_id(), false);
+        self.refund_deposit_to_account(storage, refund, env::predecessor_account_id(), false);
 
         // TODO: event
     }
@@ -769,7 +946,7 @@ impl ServiceRegistry {
         let initial_storage_usage = env::storage_usage();
 
         // Get the service
-        let mut service = self.services.get(&service_id).unwrap();
+        let service = self.services.get_mut(&service_id).unwrap();
 
         // Check the service state
         require!(service.state == ServiceState::TerminatedBonded);
@@ -790,16 +967,19 @@ impl ServiceRegistry {
         let mut refund = 0 as u128;
         for i in 0..operator_data.instances.len() {
             // Get agent id by the agent instance
-            let agent_id = service.agent_instances.get(&operator_data.instances.get(i).unwrap()).unwrap();
+            let agent_id = service.agent_instances.get(operator_data.instances.get(i).unwrap()).unwrap();
             // Get agent bond by agent id
             let bond = service.agent_params.get(&agent_id).unwrap().bond;
             // Add bond to the refund
             refund = refund.saturating_add(bond.into());
 
             // Remove the relevant data
-            self.agent_instance_operators.remove(&operator_data.instances.get(i).unwrap());
-            service.agent_instances.remove(&operator_data.instances.get(i).unwrap());
+            self.agent_instance_operators.remove(operator_data.instances.get(i).unwrap());
+            service.agent_instances.remove(operator_data.instances.get(i).unwrap());
         }
+        self.agent_instance_operators.flush();
+        service.agent_instances.flush();
+
         // Check if the refund exceeds operator's balance
         // This situation is possible if the operator was slashed for the agent instance misbehavior
         if refund > operator_data.balance {
@@ -808,14 +988,56 @@ impl ServiceRegistry {
 
         // Remove the operator data from current service
         service.operators.remove(&operator);
+        service.operators.flush();
 
+        // Update registry balance
+        self.balance = self.balance.saturating_sub(refund.into());
+
+        if service.token.is_some() {
+            // Send the token refund back to the service owner
+            fungible_token::ext(service.token.clone().unwrap())
+                .with_static_gas(CALL_GAS)
+                .ft_transfer(operator, U128::from(refund), None);
+
+            // Zero the refund since it has been already sent back
+            refund = 0;
+        }
+
+//         log!("initial storage usage {}", initial_storage_usage);
+//         log!("storage usage after {}", env::storage_usage());
         // Increased storage
         // TODO: need to correctly recalculate the storage decrease
-        let storage = env::storage_usage() - initial_storage_usage;
+        let storage = initial_storage_usage - env::storage_usage();
         // Refund storage, bond cost and the rest
         self.refund_deposit_to_account(storage, refund, env::predecessor_account_id(), false);
 
         // TODO: event
+    }
+
+    pub fn withdraw(&mut self, token: AccountId) {
+        // Get the sender balance
+        let sender_id = env::predecessor_account_id();
+        if let Some(b) = self
+            .token_balances
+            .get_mut(&token)
+            .unwrap_or_else(|| env::panic_str("Token not registered"))
+            .get_mut(&sender_id)
+        {
+            // Set the balance to zero
+            let refund = *b;
+            *b = 0;
+
+            // Send tokens back to the sender
+            fungible_token::ext(token)
+                .with_static_gas(CALL_GAS)
+                .ft_transfer(sender_id.clone(), U128::from(refund), None);
+
+            // Return excess of amount
+            self.refund_deposit_to_account(0, 0, sender_id.clone(), false);
+        } else {
+            // Fail otherwise
+            env::panic_str("Sender not registered");
+        }
     }
 
     // TODO Shall this be payable as 1 yocto is needed for?
@@ -827,28 +1049,193 @@ impl ServiceRegistry {
         // TODO: 1 or 0 here?
         if amount > 1 {
             self.slashed_funds = 0;
-            Promise::new(env::predecessor_account_id()).transfer(amount);
+            Promise::new(env::predecessor_account_id()).transfer(NearToken::from_yoctonear(amount));
         }
 
         // TODO: event
     }
 
-    pub fn get_service_state(&self, service_id: u32) -> u8 {
-        self.services.get(&service_id).unwrap().state as u8
+    // Call by the operator
+    #[payable]
+    pub fn storage_deposit(&mut self, account_id: Option<AccountId>, token: AccountId) {
+        let initial_storage_usage = env::storage_usage();
+
+        let sender_id = account_id.unwrap_or_else(env::predecessor_account_id);
+
+        // Check the token field and register account, if required
+        // Initialize or get registered token map
+        let token_balances = self
+            .token_balances
+            // Get token map
+            .entry(token)
+            // or create a new one if not
+            .or_insert(LookupMap::new(StorageKey::TokenBalances));
+
+        // Check if the service owner is registered
+        if !token_balances.contains_key(&sender_id) {
+            token_balances.set(sender_id.clone(), Some(0));
+            token_balances.flush();
+        }
+        self.token_balances.flush();
+
+        let storage = env::storage_usage() - initial_storage_usage;
+        // Pay for the storage and refund excessive amount
+        self.refund_deposit_to_account(storage, 0, sender_id, true);
     }
 
-//     pub fn get_service(&self, service_id: u32) -> Service {
-//         self.services.get(&service_id).unwrap_or_default()
-//     }
+    #[payable]
+    pub fn storage_withdraw(&mut self, token: AccountId) {
+        let initial_storage_usage = env::storage_usage();
 
-//     pub fn get_agent_params(&self, service_id: u32) -> AgentParams {
-//         //let mut agent_params = Vec::new();
-//
-//         // Get the service
-//         let service = self.services.get(&service_id).unwrap_or_default();//unwrap_or_else(|| env::panic_str("Service not found"));
-//         let agent_params = service.agent_params.get(&service_id).unwrap_or_default();
-//         agent_params
-//     }
+        let account_id = env::predecessor_account_id();
+
+        // Get the token balance
+        if let Some(b) = self
+            .token_balances
+            .get_mut(&token)
+            .unwrap_or_else(|| env::panic_str("Token not registered"))
+            .get_mut(&account_id)
+        {
+            // The balance must be zero
+            require!(*b == 0);
+
+        } else {
+            // Fail otherwise
+            env::panic_str("Sender not registered");
+        }
+
+        // Remove account storage associated with the token
+        self.token_balances.get_mut(&token).unwrap().remove(&account_id);
+        self.token_balances.flush();
+
+        let storage = initial_storage_usage - env::storage_usage();
+        // Send the storage released cost back to the sender
+        self.refund_deposit_to_account(storage, 0, account_id, false);
+    }
+
+    pub fn ft_on_transfer(
+        &mut self,
+        sender_id: AccountId,
+        amount: U128,
+        msg: String,
+    ) -> PromiseOrValue<U128> {
+        let token = env::predecessor_account_id();
+
+        // Get token balance the sender
+        if let Some(b) = self
+            .token_balances
+            .get_mut(&token)
+            .unwrap_or_else(|| env::panic_str("Token not registered"))
+            .get_mut(&sender_id)
+        {
+            // Increase for the provided amount
+            *b += amount.0;
+        } else {
+            // Fail otherwise
+            env::panic_str("Sender not registered");
+        }
+
+//         log!("Increased the token amount! {}", amount.0);
+
+        // No tokens will be returned
+        PromiseOrValue::Value(U128::from(0))
+    }
+
+    // TODO: unwrap or else or default panic message is ok?
+    pub fn get_service_state(&self, service_id: u32) -> u8 {
+        self.services.get(&service_id).unwrap().state.clone() as u8
+    }
+
+    pub fn get_service_multisig(&self, service_id: u32) -> AccountId {
+        self.services.get(&service_id).unwrap().multisig.clone().unwrap()
+    }
+
+    pub fn get_service_config_hash(&self, service_id: u32) -> [u8; 32] {
+        *self.services.get(&service_id).unwrap().config_hashes.iter().last().unwrap()
+    }
+
+    pub fn get_service_previous_config_hashes(&self, service_id: u32) -> Vec<[u8; 32]> {
+        // Get config_hashes vector in reverse order without the first element, which is the current config hash
+        self.services.get(&service_id).unwrap().config_hashes.iter().rev().skip(1).cloned().collect()
+    }
+
+    pub fn get_agent_ids(&self, service_id: u32) -> Vec<u32> {
+        self.services.get(&service_id).unwrap().agent_ids.iter().cloned().collect()
+    }
+
+    pub fn get_service_agent_params_num_instances(&self, service_id: u32) -> Vec<u32> {
+        let mut agent_params_num_agent_instances = Vec::new();
+
+        // Get the service
+        // TODO: unwrap or else or leave just unwrap
+        let service = self.services.get(&service_id).unwrap_or_else(|| env::panic_str("Service not found"));
+        for ai in service.agent_ids.iter() {
+            agent_params_num_agent_instances.push(service.agent_params.get(&ai).unwrap().num_agent_instances);
+        }
+        agent_params_num_agent_instances
+    }
+
+    pub fn get_service_agent_params_bonds(&self, service_id: u32) -> Vec<u128> {
+        let mut agent_params_bonds = Vec::new();
+
+        // Get the service
+        let service = self.services.get(&service_id).unwrap_or_else(|| env::panic_str("Service not found"));
+        for ai in service.agent_ids.iter() {
+            agent_params_bonds.push(service.agent_params.get(&ai).unwrap().bond);
+        }
+        agent_params_bonds
+    }
+
+    // Get all agent instances of the service
+    pub fn get_service_agent_instances(&self, service_id: u32) -> Vec<AccountId> {
+        let mut agent_instances = Vec::new();
+        // Get the service
+        let service = self.services.get(&service_id).unwrap_or_else(|| env::panic_str("Service not found"));
+        for ai in service.agent_ids.iter() {
+            agent_instances.extend(service.agent_params.get(ai).unwrap().instances.iter().cloned());
+        }
+        agent_instances
+    }
+
+    pub fn get_instances_for_agent_id(&self, service_id: u32, agent_id: u32) -> Vec<AccountId> {
+        // TODO: concatenate
+        // Get the service
+        let service = self.services.get(&service_id).unwrap_or_else(|| env::panic_str("Service not found"));
+        // Get agent instances for a specified agent Id
+        service.agent_params.get(&agent_id).unwrap_or_else(|| env::panic_str("Agent not found")).instances.iter().cloned().collect()
+    }
+
+    pub fn get_operator_balance(&self, operator: AccountId, service_id: u32) -> u128 {
+        // TODO: concatenate
+        // Get the service
+        let service = self.services.get(&service_id).unwrap_or_else(|| env::panic_str("Service not found"));
+        // Get operator balance for a specified service
+        service.operators.get(&operator).unwrap_or_else(|| env::panic_str("Operator not found")).balance
+    }
+
+    pub fn get_operator_service_agent_instances(&self, operator: AccountId, service_id: u32) -> Vec<AccountId> {
+        // TODO: concatenate
+        // Get the service
+        let service = self.services.get(&service_id).unwrap_or_else(|| env::panic_str("Service not found"));
+        // Get agent instances for a specified agent Id
+        service.operators.get(&operator).unwrap_or_else(|| env::panic_str("Operator not found")).instances.iter().cloned().collect()
+    }
+
+    pub fn get_registry_balance(&self) -> u128 {
+        self.balance
+    }
+
+    pub fn get_registry_slashed_funds(&self) -> u128 {
+        self.slashed_funds
+    }
+
+    pub fn get_storage_usage(&self) -> u64 {
+        env::storage_usage()
+    }
+
+    pub fn get_storage_price(&self) -> u128 {
+        env::storage_byte_cost().saturating_mul(env::storage_usage().into()).as_yoctonear()
+    }
 
 //     pub fn set_metadata(
 //         &mut self,
@@ -868,18 +1255,6 @@ impl ServiceRegistry {
 //         reference_hash.map(|reference_hash| self.reference_hash = reference_hash);
 //         decimals.map(|decimals| self.decimals = decimals);
 //         icon.map(|icon| self.icon = Some(icon));
-//     }
-//
-//     #[payable]
-//     pub fn mint(&mut self, account_id: AccountId, amount: u128) {
-//         assert_eq!(
-//             env::predecessor_account_id(),
-//             self.controller,
-//             "Only controller can call mint"
-//         );
-//
-//         self.storage_deposit(Some(account_id.clone()), None);
-//         self.token.internal_deposit(&account_id, amount.into());
 //     }
 
     pub fn account_storage_usage(&self) -> StorageUsage {
@@ -901,6 +1276,7 @@ impl ServiceRegistry {
         self.paused = if paused { true } else { false };
     }
 
+    // TODO convert to u32?
     pub fn total_supply(&self) -> U128 {
         self.tokens.nft_total_supply()
     }
@@ -913,6 +1289,60 @@ impl ServiceRegistry {
         env!("CARGO_PKG_VERSION").to_owned()
     }
 }
+
+// impl Default for AccountId {
+//     fn default() -> Self {
+//         Self {
+//             account_id: "aaa";
+//         }
+//     }
+// }
+//
+impl Default for ServiceRegistry {
+    fn default() -> Self {
+        Self {
+            owner: "".parse().unwrap(),
+            services: LookupMap::new(StorageKey::Service),
+            tokens: NonFungibleToken::new(
+                StorageKey::NonFungibleToken,
+                "".parse().unwrap(),
+                Some(StorageKey::TokenMetadata),
+                Some(StorageKey::Enumeration),
+                Some(StorageKey::Approval),
+            ),
+            metadata: LazyOption::new(StorageKey::Metadata, Some(&NFTContractMetadata {
+                spec: Default::default(),
+                name: Default::default(),
+                symbol: Default::default(),
+                icon: None,
+                base_uri: None,
+                reference: None,
+                reference_hash: None,
+            })),
+            agent_instance_operators: LookupMap::new(StorageKey::AgentInstanceOperator),
+            token_balances: LookupMap::new(StorageKey::CustomToken),
+            paused: Default::default(),
+            multisig_factory: "".parse().unwrap(),
+            balance: Default::default(),
+            slashed_funds: Default::default()
+        }
+    }
+
+//     /// This function can only be called from the factory or from the contract itself.
+//     #[init(ignore_state)]
+//     pub fn migrate(from_version: u32) -> Self {
+//         if from_version == 0 {
+//             // Adding icon as suggested here: https://nomicon.io/Standards/FungibleToken/Metadata.html
+//             let old_state: BridgeTokenV0 = env::state_read().expect("Contract isn't initialized");
+//             let new_state: BridgeToken = old_state.into();
+//             assert!(new_state.controller_or_self());
+//             new_state
+//         } else {
+//             env::state_read().unwrap()
+//         }
+//     }
+}
+
 
 // near_contract_standards::impl_non_fungible_token_core!(ServiceRegistry, tokens);
 // near_contract_standards::impl_non_fungible_token_approval!(ServiceRegistry, tokens);
