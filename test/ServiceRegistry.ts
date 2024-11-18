@@ -34,7 +34,6 @@ test.beforeEach(async t => {
     // Init the worker and start a Sandbox server
     const worker = await Worker.init();
 
-    console.log()
 
     // Prepare sandbox for tests, create accounts, deploy contracts, etx.
     const root = worker.rootAccount;
