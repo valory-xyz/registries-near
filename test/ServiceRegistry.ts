@@ -34,6 +34,7 @@ test.beforeEach(async t => {
     // Init the worker and start a Sandbox server
     const worker = await Worker.init();
 
+
     // Prepare sandbox for tests, create accounts, deploy contracts, etx.
     const root = worker.rootAccount;
     // Deploy the main registry contract

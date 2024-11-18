@@ -1,8 +1,8 @@
 use near_contract_standards::non_fungible_token::metadata::{
-    NFTContractMetadata, TokenMetadata, NonFungibleTokenMetadataProvider, NFT_METADATA_SPEC,
+    NFTContractMetadata, TokenMetadata, NonFungibleTokenMetadataProvider, NFT_METADATA_SPEC, 
 };
-use near_contract_standards::non_fungible_token::enumeration::NonFungibleTokenEnumeration;
-use near_contract_standards::non_fungible_token::{NonFungibleToken, Token};
+// use near_contract_standards::non_fungible_token::enumeration::NonFungibleTokenEnumeration;
+use near_contract_standards::non_fungible_token::{NonFungibleToken, Token, TokenId};
 use near_sdk::borsh::{self, BorshDeserialize, BorshSerialize};
 use near_sdk::serde::{Serialize, Deserialize};
 use near_sdk::json_types::{Base64VecU8, U128, Base58PublicKey};
@@ -1343,14 +1343,13 @@ impl Default for ServiceRegistry {
 //     }
 }
 
-
-// near_contract_standards::impl_non_fungible_token_core!(ServiceRegistry, tokens);
-// near_contract_standards::impl_non_fungible_token_approval!(ServiceRegistry, tokens);
-// near_contract_standards::impl_non_fungible_token_enumeration!(ServiceRegistry, tokens);
+near_contract_standards::impl_non_fungible_token_core!(ServiceRegistry, tokens);
+near_contract_standards::impl_non_fungible_token_approval!(ServiceRegistry, tokens);
+near_contract_standards::impl_non_fungible_token_enumeration!(ServiceRegistry, tokens);
 //
-// #[near_bindgen]
-// impl NonFungibleTokenMetadataProvider for ServiceRegistry {
-//     fn nft_metadata(&self) -> NFTContractMetadata {
-//         self.metadata.get().unwrap()
-//     }
-// }
+#[near]
+impl NonFungibleTokenMetadataProvider for ServiceRegistry {
+    fn nft_metadata(&self) -> NFTContractMetadata {
+         self.metadata.get().unwrap()
+    }
+}
