@@ -3,34 +3,15 @@ use near_contract_standards::non_fungible_token::metadata::{
 };
 // use near_contract_standards::non_fungible_token::enumeration::NonFungibleTokenEnumeration;
 use near_contract_standards::non_fungible_token::{NonFungibleToken, Token, TokenId};
-use near_sdk::borsh::{self, BorshDeserialize, BorshSerialize};
+use near_sdk::borsh::BorshSerialize;
 use near_sdk::serde::{Serialize, Deserialize};
-use near_sdk::json_types::{Base64VecU8, U128, Base58PublicKey};
-use near_sdk::serde_json::json;
+use near_sdk::json_types::{Base58PublicKey, U128};
 use near_sdk::collections::LazyOption;
 use near_sdk::{
-    env, near, require, AccountId, BorshStorageKey, PanicOnDefault, Promise, PromiseOrValue, StorageUsage, Gas,
-    IntoStorageKey, PromiseError, NearToken, log
+    env, near, require, AccountId, BorshStorageKey, Promise, PromiseOrValue, StorageUsage, Gas, PromiseError, NearToken, log
 };
 use near_sdk::store::{LookupMap, Vector};
 use near_sdk::ext_contract;
-//use near_account_id::{AccountId};
-//near_token::NearToken
-//use near_gas::NearGas;
-
-// pub mod external;
-// pub use crate::external::*;
-
-// const NO_DEPOSIT: Balance = 0;
-// const CURRENT_STATE_VERSION: u32 = 1;
-// const TGAS: u64 = 1_000_000_000_000;
-
-// #[near(serializers=[borsh])]
-// #[derive(Clone, Serialize, Deserialize)]
-// #[serde(crate = "near_sdk::serde", untagged)]
-// pub struct MutisigAccountMember {
-//     account_id: AccountId,
-// }
 
 #[derive(Serialize, Deserialize, PartialEq)]
 #[serde(crate = "near_sdk::serde", untagged)]
@@ -86,7 +67,8 @@ pub struct AgentParams {
 #[near(serializers=[borsh])]
 pub struct OperatorData {
     pub balance: u128,
-    pub instances: Vector<AccountId>
+    pub instances: Vector<AccountId>,
+    pub whitelisted: bool
 }
 
 #[near(serializers=[borsh])]
@@ -117,7 +99,9 @@ pub struct Service {
     // Map of agent instances in the service and their corresponding agent ids
     pub agent_instances: LookupMap<AccountId, u32>,
     // Map of operators in the service and their corresponding OperatorData struct
-    pub operators: LookupMap<AccountId, OperatorData>
+    pub operators: LookupMap<AccountId, OperatorData>,
+    // Operators check flag
+    pub operators_check: bool
 }
 
 const CALL_GAS: Gas = Gas::from_tgas(5);
@@ -423,7 +407,8 @@ impl ServiceRegistry {
                 agent_ids: Vector::new(StorageKey::AgentId),
                 agent_params: LookupMap::new(StorageKey::AgentParam),
                 agent_instances: LookupMap::new(StorageKey::AgentInstance),
-                operators: LookupMap::new(StorageKey::OperatorData)
+                operators: LookupMap::new(StorageKey::OperatorData),
+                operators_check: false
             }
         );
 
@@ -589,7 +574,8 @@ impl ServiceRegistry {
             // or create a new one if not
             .or_insert(OperatorData{
                 balance: 0 as u128,
-                instances: Vector::new(StorageKey::AgentInstance)
+                instances: Vector::new(StorageKey::AgentInstance),
+                whitelisted: true
             });
 
         // Traverse agent instances and corresponding agent ids
@@ -1058,6 +1044,76 @@ impl ServiceRegistry {
         // TODO: event
     }
 
+    /// @param setCheck True if the whitelisting check is needed, and false otherwise.
+    // Call by the service owner
+    pub fn set_operators_check(&mut self, service_id: u32, set_check: bool) {
+        // Check for service owner
+        let owner_id = self.tokens
+            .owner_by_id
+            .get(&service_id.to_string())
+            .unwrap_or_else(|| env::panic_str("Service not found"));
+        require!(env::predecessor_account_id() == owner_id, "Predecessor must be token owner.");
+
+        // Get the service
+        // TODO Check if service id exists?
+        let service = self.services.get_mut(&service_id).unwrap();
+
+        // Set the operator address check requirement
+        service.operators_check = set_check;
+
+        // TODO: event
+        //emit SetOperatorsCheck(msg.sender, serviceId, setCheck);
+    }
+
+    // Call by the service owner
+    #[payable]
+    pub fn set_operators_statuses(&mut self, service_id: u32, operators: Vec<AccountId>, statuses: Vec<bool>, set_check: bool) {
+        // Check for service owner
+        let owner_id = self.tokens
+            .owner_by_id
+            .get(&service_id.to_string())
+            .unwrap_or_else(|| env::panic_str("Service not found"));
+        require!(env::predecessor_account_id() == owner_id, "Predecessor must be token owner.");
+
+        // Check array lengths
+        require!(operators.len() > 0);
+        require!(operators.len() == statuses.len());
+
+        // Record current storage usage
+        let initial_storage_usage = env::storage_usage();
+
+        // Get the service
+        // TODO Check if service id exists?
+        let service = self.services.get_mut(&service_id).unwrap();
+
+        // Set the operator address check requirement
+        service.operators_check = set_check;
+
+        // Set operators statuses
+        for i in 0..operators.len() {
+            // Initialize or get operator struct
+            let operator_data = service
+                .operators
+                // Get operator struct
+                .entry(operators[i].clone())
+                // or create a new one if not
+                .or_insert(OperatorData{
+                    balance: 0 as u128,
+                    instances: Vector::new(StorageKey::AgentInstance),
+                    whitelisted: true
+                });
+            operator_data.whitelisted = statuses[i];
+        }
+        service.operators.flush();
+
+        // TODO: event
+        //emit OperatorsWhitelistUpdated(msg.sender, serviceId, operators, statuses, setCheck);
+
+        let storage = env::storage_usage() - initial_storage_usage;
+        // Pay for the storage and refund excessive amount
+        self.refund_deposit_to_account(storage, 0, env::predecessor_account_id(), true);
+    }
+
     // Call by the operator
     #[payable]
     pub fn storage_deposit(&mut self, account_id: Option<AccountId>, token: AccountId) {
@@ -1266,6 +1322,22 @@ impl ServiceRegistry {
         service.operators.get(&operator).unwrap_or_else(|| env::panic_str("Operator not found")).instances.iter().cloned().collect()
     }
 
+    pub fn is_operator_whitelisted(&self, service_id: u32, operator: AccountId) -> bool {
+        let mut status = true;
+        // Get the service owner address
+        let owner_id = self.tokens
+            .owner_by_id
+            .get(&service_id.to_string())
+            .unwrap_or_else(|| env::panic_str("Service not found"));
+
+        // Check the operator whitelisting status, if applied by the service owner
+        let operators_check = self.services.get(&service_id).unwrap().operators_check;
+        if owner_id != operator && operators_check {
+            status = self.services.get(&service_id).unwrap().operators.get(&operator).unwrap().whitelisted;
+        }
+
+        status
+    }
     pub fn get_registry_balance(&self) -> u128 {
         self.balance
     }
@@ -1330,14 +1402,6 @@ impl ServiceRegistry {
     }
 }
 
-// impl Default for AccountId {
-//     fn default() -> Self {
-//         Self {
-//             account_id: "aaa";
-//         }
-//     }
-// }
-//
 impl Default for ServiceRegistry {
     fn default() -> Self {
         Self {
@@ -1368,26 +1432,13 @@ impl Default for ServiceRegistry {
             upgrade_hash: Vec::new()
         }
     }
-
-//     /// This function can only be called from the factory or from the contract itself.
-//     #[init(ignore_state)]
-//     pub fn migrate(from_version: u32) -> Self {
-//         if from_version == 0 {
-//             // Adding icon as suggested here: https://nomicon.io/Standards/FungibleToken/Metadata.html
-//             let old_state: BridgeTokenV0 = env::state_read().expect("Contract isn't initialized");
-//             let new_state: BridgeToken = old_state.into();
-//             assert!(new_state.controller_or_self());
-//             new_state
-//         } else {
-//             env::state_read().unwrap()
-//         }
-//     }
 }
 
 near_contract_standards::impl_non_fungible_token_core!(ServiceRegistry, tokens);
 near_contract_standards::impl_non_fungible_token_approval!(ServiceRegistry, tokens);
 near_contract_standards::impl_non_fungible_token_enumeration!(ServiceRegistry, tokens);
-//
+
+// TODO Is this required?
 #[near]
 impl NonFungibleTokenMetadataProvider for ServiceRegistry {
     fn nft_metadata(&self) -> NFTContractMetadata {
