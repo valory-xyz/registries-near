@@ -134,7 +134,9 @@ pub struct ServiceRegistry {
     paused: bool,
     multisig_factory: AccountId,
     balance: u128,
-    slashed_funds: u128
+    slashed_funds: u128,
+    // Contract upgrade hash
+    upgrade_hash: Vec<u8>
 }
 
 const DATA_IMAGE_SVG_NEAR_ICON: &str = "data:image/svg+xml,%3Csvg xmlns='http://www.w3.org/2000/svg' viewBox='0 0 288 288'%3E%3Cg id='l' data-name='l'%3E%3Cpath d='M187.58,79.81l-30.1,44.69a3.2,3.2,0,0,0,4.75,4.2L191.86,103a1.2,1.2,0,0,1,2,.91v80.46a1.2,1.2,0,0,1-2.12.77L102.18,77.93A15.35,15.35,0,0,0,90.47,72.5H87.34A15.34,15.34,0,0,0,72,87.84V201.16A15.34,15.34,0,0,0,87.34,216.5h0a15.35,15.35,0,0,0,13.08-7.31l30.1-44.69a3.2,3.2,0,0,0-4.75-4.2L96.14,186a1.2,1.2,0,0,1-2-.91V104.61a1.2,1.2,0,0,1,2.12-.77l89.55,107.23a15.35,15.35,0,0,0,11.71,5.43h3.13A15.34,15.34,0,0,0,216,201.16V87.84A15.34,15.34,0,0,0,200.66,72.5h0A15.35,15.35,0,0,0,187.58,79.81Z'/%3E%3C/g%3E%3C/svg%3E";
@@ -200,7 +202,8 @@ impl ServiceRegistry {
             paused: false,
             multisig_factory,
             balance: 0 as u128,
-            slashed_funds: 0 as u128
+            slashed_funds: 0 as u128,
+            upgrade_hash: Vec::new()
         }
     }
 
@@ -1141,6 +1144,48 @@ impl ServiceRegistry {
         PromiseOrValue::Value(U128::from(0))
     }
 
+    pub fn change_upgrade_hash(&mut self, hash: Vec<u8>) {
+        require!(self.owner_or_self());
+
+        env::log_str(&format!(
+            "ServiceRegistry/{}#{}: update_contract_hash: {}",
+            file!(),
+            line!(),
+            hex::encode(&hash)
+        ));
+
+        self.upgrade_hash = hash;
+    }
+
+	pub fn upgrade_contract(&self) {
+        // Receive the code directly from the input to avoid the
+        // GAS overhead of deserializing parameters
+        let code = env::input().expect("Error: No input").to_vec();
+
+        let hash = env::sha256(&code);
+
+        // Check if caller is authorized to update the contract code
+        if hash != self.upgrade_hash {
+           env::panic_str("InvalidUpgradeContractHash");
+        }
+
+        env::log_str(&format!(
+            "ServiceRegistry/{}#{}: : {}",
+            file!(),
+            line!(),
+            hex::encode(&hash)
+        ));
+
+        // Deploy the contract on self
+        Promise::new(env::current_account_id())
+            .deploy_contract(code);
+    }
+
+    pub fn set_paused(&mut self, paused: bool) {
+        require!(self.owner_or_self());
+        self.paused = if paused { true } else { false };
+    }
+
     // TODO: unwrap or else or default panic message is ok?
     pub fn get_service_state(&self, service_id: u32) -> u8 {
         self.services.get(&service_id).unwrap().state.clone() as u8
@@ -1271,11 +1316,6 @@ impl ServiceRegistry {
         self.paused //&& !self.owner_or_self()
     }
 
-    pub fn set_paused(&mut self, paused: bool) {
-        require!(self.owner_or_self());
-        self.paused = if paused { true } else { false };
-    }
-
     // TODO convert to u32?
     pub fn total_supply(&self) -> U128 {
         self.tokens.nft_total_supply()
@@ -1324,7 +1364,8 @@ impl Default for ServiceRegistry {
             paused: Default::default(),
             multisig_factory: "".parse().unwrap(),
             balance: Default::default(),
-            slashed_funds: Default::default()
+            slashed_funds: Default::default(),
+            upgrade_hash: Vec::new()
         }
     }
 
