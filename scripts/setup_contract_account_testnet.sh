@@ -8,6 +8,6 @@ near account create-account fund-myself contract_000.sub_olas.olas_000.testnet '
 
 #near send-near olas_000.testnet sub_olas.olas_000.testnet 8 --networkId testnet
 
-near deploy contract_000.sub_olas.olas_000.testnet target/wasm32-unknown-unknown/release/registries_near.wasm --initFunction new_default_meta --initArgs '{"owner_id":"sub_olas.olas_000.testnet", "multisig_factory": "multisignature2.testnet"}' --networkId testnet
+near deploy contract_000.sub_olas.olas_000.testnet target/wasm32-unknown-unknown/release/registries_near.wasm --initFunction new --initArgs '{"multisig_factory": "multisignature2.testnet", "metadata": {"spec": "nft-1.0.0", "name": "Service Registry NFT", "symbol": "SR", "icon": "data:image", base_uri: "https://gateway.autonolas.tech/ipfs/"}}' --networkId testnet
 
 cp ../../.near-credentials/testnet/contract_000.sub_olas.olas_000.testnet.json .near-credentials/workspaces/testnet/.

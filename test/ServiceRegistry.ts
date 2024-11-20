@@ -1,9 +1,25 @@
 import {Worker, NEAR, NearAccount} from "near-workspaces";
 import anyTest, {TestFn} from "ava";
 
-const defaultMetadata = {
+const serviceId = 1;
+const configHash = Array(32).fill(5);
+const configHash2 = Array(32).fill(9);
+const agentIds = [1];
+const agentNumInstances = [1];
+const agentBonds = [1000];
+const threshold = 1;
+
+const defaultContractMetadata = {
+    spec: "nft-1.0.0", // NFT_METADATA_SPEC from near_contract_standards::non_fungible_token::metadata
+    name: "Service Registry NFT",
+    symbol: "SR",
+    icon: "data:image/svg+xml,%3Csvg xmlns='http://www.w3.org/2000/svg' viewBox='0 0 288 288'%3E%3Cg id='l' data-name='l'%3E%3Cpath d='M187.58,79.81l-30.1,44.69a3.2,3.2,0,0,0,4.75,4.2L191.86,103a1.2,1.2,0,0,1,2,.91v80.46a1.2,1.2,0,0,1-2.12.77L102.18,77.93A15.35,15.35,0,0,0,90.47,72.5H87.34A15.34,15.34,0,0,0,72,87.84V201.16A15.34,15.34,0,0,0,87.34,216.5h0a15.35,15.35,0,0,0,13.08-7.31l30.1-44.69a3.2,3.2,0,0,0-4.75-4.2L96.14,186a1.2,1.2,0,0,1-2-.91V104.61a1.2,1.2,0,0,1,2.12-.77l89.55,107.23a15.35,15.35,0,0,0,11.71,5.43h3.13A15.34,15.34,0,0,0,216,201.16V87.84A15.34,15.34,0,0,0,200.66,72.5h0A15.35,15.35,0,0,0,187.58,79.81Z'/%3E%3C/g%3E%3C/svg%3E",
+    base_uri: "https://gateway.autonolas.tech/ipfs/"
+}
+
+const defaultServiceMetadata = {
     title: "Service Name",
-    description: "Service Destription",
+    description: "Service Description",
     media: "",
     media_hash: "",
     copies: 1,
@@ -15,14 +31,6 @@ const defaultMetadata = {
     reference: "",
     reference_hash: "",
 }
-
-const serviceId = 1;
-const configHash = Array(32).fill(5);
-const configHash2 = Array(32).fill(9);
-const agentIds = [1];
-const agentNumInstances = [1];
-const agentBonds = [1000];
-const threshold = 1;
 
 
 const test = anyTest as TestFn<{
@@ -94,16 +102,16 @@ test("Create service and check its state", async t => {
     const {root, contract, deployer} = t.context.accounts;
 
     // Initialize the contract
-    await root.call(contract, "new_default_meta", {
-        owner_id: deployer,
-        multisig_factory: deployer
+    await root.call(contract, "new", {
+        multisig_factory: deployer,
+        metadata: defaultContractMetadata
     });
 
     // Create service
     const attachedDeposit = "5 N";
     await root.call(contract, "create", {
         service_owner: deployer,
-        metadata: defaultMetadata,
+        metadata: defaultServiceMetadata,
         config_hash: configHash,
         agent_ids: agentIds,
         agent_num_instances: agentNumInstances,
@@ -117,22 +125,25 @@ test("Create service and check its state", async t => {
     // Check that the service is in the PreRegistration state
     result = await contract.view("get_service_state", {service_id: serviceId});
     t.is(result, 1);
+
+    const metadata = await contract.view("nft_metadata", {});
+    console.log(metadata);
 });
 
 test("Update service with the same setup and check its state", async t => {
     const {root, contract, deployer} = t.context.accounts;
 
     // Initialize the contract
-    await root.call(contract, "new_default_meta", {
-        owner_id: deployer,
-        multisig_factory: deployer
+    await root.call(contract, "new", {
+        multisig_factory: deployer,
+        metadata: defaultContractMetadata
     });
 
     // Create service
     const attachedDeposit = "5 N";
     await root.call(contract, "create", {
         service_owner: deployer,
-        metadata: defaultMetadata,
+        metadata: defaultServiceMetadata,
         config_hash: configHash,
         agent_ids: agentIds,
         agent_num_instances: agentNumInstances,
@@ -159,16 +170,16 @@ test("Update service with different agent ids and check its state", async t => {
     const {root, contract, deployer} = t.context.accounts;
 
     // Initialize the contract
-    await root.call(contract, "new_default_meta", {
-        owner_id: deployer,
-        multisig_factory: deployer
+    await root.call(contract, "new", {
+        multisig_factory: deployer,
+        metadata: defaultContractMetadata
     });
 
     // Create service
     const attachedDeposit = "5 N";
     await root.call(contract, "create", {
         service_owner: deployer,
-        metadata: defaultMetadata,
+        metadata: defaultServiceMetadata,
         config_hash: configHash,
         agent_ids: agentIds,
         agent_num_instances: agentNumInstances,
@@ -203,16 +214,16 @@ test("Activate service agent registration and check service state", async t => {
     const {root, contract, deployer} = t.context.accounts;
 
     // Initialize the contract
-    await root.call(contract, "new_default_meta", {
-        owner_id: deployer,
-        multisig_factory: deployer
+    await root.call(contract, "new", {
+        multisig_factory: deployer,
+        metadata: defaultContractMetadata
     });
 
     // Create service
     const attachedDeposit = "5 N";
     await root.call(contract, "create", {
         service_owner: deployer,
-        metadata: defaultMetadata,
+        metadata: defaultServiceMetadata,
         config_hash: configHash,
         agent_ids: agentIds,
         agent_num_instances: agentNumInstances,
@@ -234,16 +245,16 @@ test("Terminate service after its registration activation and check its state", 
     const {root, contract, deployer} = t.context.accounts;
 
     // Initialize the contract
-    await root.call(contract, "new_default_meta", {
-        owner_id: deployer,
-        multisig_factory: deployer
+    await root.call(contract, "new", {
+        multisig_factory: deployer,
+        metadata: defaultContractMetadata
     });
 
     // Create service
     const attachedDeposit = "5 N";
     await root.call(contract, "create", {
         service_owner: deployer,
-        metadata: defaultMetadata,
+        metadata: defaultServiceMetadata,
         config_hash: configHash,
         agent_ids: agentIds,
         agent_num_instances: agentNumInstances,
@@ -270,16 +281,16 @@ test("Register agent instances by the operator and check service state and value
     const {root, contract, deployer, operator, agentInstance} = t.context.accounts;
 
     // Initialize the contract
-    await root.call(contract, "new_default_meta", {
-        owner_id: deployer,
-        multisig_factory: deployer
+    await root.call(contract, "new", {
+        multisig_factory: deployer,
+        metadata: defaultContractMetadata
     });
 
     // Create service
     const attachedDeposit = "5 N";
     await root.call(contract, "create", {
         service_owner: deployer,
-        metadata: defaultMetadata,
+        metadata: defaultServiceMetadata,
         config_hash: configHash,
         agent_ids: agentIds,
         agent_num_instances: agentNumInstances,
@@ -325,13 +336,13 @@ test("Register agent instances by the operator and check service state and value
     //t.log(balance.toHuman());
 });
 
-test.only("Unbond after service termination and check service state and values", async t => {
+test("Unbond after service termination and check service state and values", async t => {
     const {root, contract, deployer, operator, agentInstance} = t.context.accounts;
 
     // Initialize the contract
-    await root.call(contract, "new_default_meta", {
-        owner_id: deployer,
-        multisig_factory: deployer
+    await root.call(contract, "new", {
+        multisig_factory: deployer,
+        metadata: defaultContractMetadata
     });
 
     let storage = await contract.view("get_storage_usage", {});
@@ -347,7 +358,7 @@ test.only("Unbond after service termination and check service state and values",
     const attachedDeposit = "5 N";
     await root.call(contract, "create", {
         service_owner: deployer,
-        metadata: defaultMetadata,
+        metadata: defaultServiceMetadata,
         config_hash: configHash,
         agent_ids: agentIds,
         agent_num_instances: agentNumInstances,
@@ -440,9 +451,9 @@ test.only("Unbond after service termination and check service state and values",
 //    const {root, contract, deployer, operator, agentInstance} = t.context.accounts;
 //
 //    // Initialize the contract
-//    await root.call(contract, "new_default_meta", {
-//        owner_id: deployer,
-//        multisig_factory: deployer
+//    await root.call(contract, "new", {
+//        multisig_factory: deployer,
+//        metadata: defaultContractMetadata
 //    });
 //
 //    let storage = await contract.view("get_storage_usage", {});
@@ -458,7 +469,7 @@ test.only("Unbond after service termination and check service state and values",
 //    const attachedDeposit = "5 N";
 //    await root.call(contract, "create", {
 //        service_owner: deployer,
-//        metadata: defaultMetadata,
+//        metadata: defaultServiceMetadata,
 //        config_hash: configHash,
 //        agent_ids: agentIds,
 //        agent_num_instances: agentNumInstances,
@@ -547,9 +558,9 @@ test.only("Unbond after service termination and check service state and values",
 //    const {root, contract, token, deployer, operator, agentInstance} = t.context.accounts;
 //
 //    // Initialize the contract
-//    await root.call(contract, "new_default_meta", {
-//        owner_id: deployer,
-//        multisig_factory: deployer
+//    await root.call(contract, "new", {
+//        multisig_factory: deployer,
+//        metadata: defaultContractMetadata
 //    });
 //
 //    let storage = await contract.view("get_storage_usage", {});
@@ -565,7 +576,7 @@ test.only("Unbond after service termination and check service state and values",
 //    const attachedDeposit = "5 N";
 //    await root.call(contract, "create", {
 //        service_owner: deployer,
-//        metadata: defaultMetadata,
+//        metadata: defaultServiceMetadata,
 //        token: token.accountId,
 //        config_hash: configHash,
 //        agent_ids: agentIds,
@@ -579,16 +590,16 @@ test("Unbond after terminating the service with a token deposit", async t => {
     const {root, contract, token, deployer, operator, agentInstance} = t.context.accounts;
 
     // Initialize the contract
-    await root.call(contract, "new_default_meta", {
-        owner_id: deployer,
-        multisig_factory: deployer
+    await root.call(contract, "new", {
+        multisig_factory: deployer,
+        metadata: defaultContractMetadata
     });
 
     // Create service
     const attachedDeposit = "5 N";
     await root.call(contract, "create", {
         service_owner: deployer,
-        metadata: defaultMetadata,
+        metadata: defaultServiceMetadata,
         token: token.accountId,
         config_hash: configHash,
         agent_ids: agentIds,
