@@ -1,9 +1,8 @@
 use near_contract_standards::non_fungible_token::metadata::{
     NFTContractMetadata, TokenMetadata, NonFungibleTokenMetadataProvider
 };
-// use near_contract_standards::non_fungible_token::enumeration::NonFungibleTokenEnumeration;
 use near_contract_standards::non_fungible_token::{NonFungibleToken, Token, TokenId};
-use near_contract_standards::fungible_token::{ receiver::FungibleTokenReceiver, FungibleTokenResolver};
+use near_contract_standards::fungible_token::{core::ext_ft_core, receiver::FungibleTokenReceiver};
 use near_sdk::borsh::BorshSerialize;
 use near_sdk::serde::{Serialize, Deserialize};
 use near_sdk::json_types::{Base58PublicKey, U128};
@@ -37,12 +36,6 @@ trait MultisigFactory {
 #[ext_contract(multisig2)]
 trait Multisig2 {
     fn get_members(&self) -> Vec<MultisigMember>;
-}
-
-// FungibleToken interface
-#[ext_contract(fungible_token)]
-trait FungibleToken {
-    fn ft_transfer(&mut self, receiver_id: AccountId, amount: U128, memo: Option<String>);
 }
 
 
@@ -889,7 +882,7 @@ impl ServiceRegistry {
 
         if service.token.is_some() {
             // Send the token refund back to the service owner
-            fungible_token::ext(service.token.clone().unwrap())
+            ext_ft_core::ext(service.token.clone().unwrap())
                 .with_static_gas(CALL_GAS)
                 .ft_transfer(owner_id, U128::from(refund), None);
 
@@ -963,7 +956,7 @@ impl ServiceRegistry {
 
         if service.token.is_some() {
             // Send the token refund back to the service owner
-            fungible_token::ext(service.token.clone().unwrap())
+            ext_ft_core::ext(service.token.clone().unwrap())
                 .with_static_gas(CALL_GAS)
                 .ft_transfer(operator, U128::from(refund), None);
 
@@ -996,7 +989,7 @@ impl ServiceRegistry {
             *b = 0;
 
             // Send tokens back to the sender
-            fungible_token::ext(token)
+            ext_ft_core::ext(token)
                 .with_static_gas(CALL_GAS)
                 .ft_transfer(sender_id.clone(), U128::from(refund), None);
 
@@ -1149,34 +1142,6 @@ impl ServiceRegistry {
         let storage = initial_storage_usage - env::storage_usage();
         // Send the storage released cost back to the sender
         self.refund_deposit_to_account(storage, 0, account_id, false);
-    }
-
-    pub fn ft_on_transfer(
-        &mut self,
-        sender_id: AccountId,
-        amount: U128,
-        msg: String,
-    ) -> PromiseOrValue<U128> {
-        let token = env::predecessor_account_id();
-
-        // Get token balance the sender
-        if let Some(b) = self
-            .token_balances
-            .get_mut(&token)
-            .unwrap_or_else(|| env::panic_str("Token not registered"))
-            .get_mut(&sender_id)
-        {
-            // Increase for the provided amount
-            *b += amount.0;
-        } else {
-            // Fail otherwise
-            env::panic_str("Sender not registered");
-        }
-
-        log!("Increased the token amount! {}", amount.0);
-
-        // No tokens will be returned
-        PromiseOrValue::Value(U128::from(0))
     }
 
     pub fn change_upgrade_hash(&mut self, hash: Vec<u8>) {
@@ -1417,10 +1382,40 @@ near_contract_standards::impl_non_fungible_token_core!(ServiceRegistry, tokens);
 near_contract_standards::impl_non_fungible_token_approval!(ServiceRegistry, tokens);
 near_contract_standards::impl_non_fungible_token_enumeration!(ServiceRegistry, tokens);
 
-// TODO Is this required?
 #[near]
 impl NonFungibleTokenMetadataProvider for ServiceRegistry {
     fn nft_metadata(&self) -> NFTContractMetadata {
          self.metadata.clone().unwrap()
+    }
+}
+
+#[near]
+impl FungibleTokenReceiver for ServiceRegistry {
+    fn ft_on_transfer(
+        &mut self,
+        sender_id: AccountId,
+        amount: U128,
+        msg: String,
+    ) -> PromiseOrValue<U128> {
+        let token = env::predecessor_account_id();
+
+        // Get token balance the sender
+        if let Some(b) = self
+            .token_balances
+            .get_mut(&token)
+            .unwrap_or_else(|| env::panic_str("Token not registered"))
+            .get_mut(&sender_id)
+        {
+            // Increase for the provided amount
+            *b += amount.0;
+        } else {
+            // Fail otherwise
+            env::panic_str("Sender not registered");
+        }
+
+        log!("Increased the token amount! {}", amount.0);
+
+        // No tokens will be returned
+        PromiseOrValue::Value(U128::from(0))
     }
 }
