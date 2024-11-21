@@ -16,8 +16,8 @@ Look at: https://github.com/blocksecteam/rustle/blob/main/docs/detectors/reentra
 #### lack of overflow check for arithmetic operation
 ```            
 *b += amount.0;
-
 ```
+
 
 
 ### Critical issue. Incorrect logic ft_transfer
@@ -89,6 +89,10 @@ pub fn change_owner(&mut self, new_owner: AccountId)
             // TODO refund
 ```
 
+#### set_operators_statuses check service_id
+```
+require!(self.services.contains_key(&service_id), "Service not found");
+```
 
 ### Low issue
 #### not private pub fn refund_deposit_to_account
@@ -97,6 +101,17 @@ pub fn change_owner(&mut self, new_owner: AccountId)
     pub fn refund_deposit_to_account
 ```
 better "private pub fn" vs "fn". To discussing
+
+#### better code update_multisig_callback?
+```
+let matching = agent_instances.iter().zip(multisig_members.iter()).all(|(ai, mm)| ai == mm);
+```
+
+#### better code drain?
+```
+const NATIVE_TOKEN: &str = "near";
+```
+
 
 
 
