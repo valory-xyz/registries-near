@@ -106,12 +106,12 @@ pub struct ServiceRegistry {
     services: LookupMap<u32, Service>,
     tokens: NonFungibleToken,
     metadata: Option<NFTContractMetadata>,
-    token_balances: LookupMap<AccountId, LookupMap<AccountId, u128>>,
+    all_token_balances: LookupMap<AccountId, LookupMap<AccountId, u128>>,
     agent_instance_operators: LookupMap<AccountId, AccountId>,
     paused: bool,
     multisig_factory: AccountId,
     balance: u128,
-    slashed_funds: u128,
+    slashed_funds: LookupMap<AccountId, u128>,
     // Contract upgrade hash
     upgrade_hash: Vec<u8>
 }
@@ -154,11 +154,11 @@ impl ServiceRegistry {
             ),
             metadata: Some(metadata),
             agent_instance_operators: LookupMap::new(StorageKey::AgentInstanceOperator),
-            token_balances: LookupMap::new(StorageKey::CustomToken),
+            all_token_balances: LookupMap::new(StorageKey::CustomToken),
             paused: false,
             multisig_factory,
             balance: 0 as u128,
-            slashed_funds: 0 as u128,
+            slashed_funds: LookupMap::new(StorageKey::TokenBalances),
             upgrade_hash: Vec::new()
         }
     }
@@ -287,7 +287,7 @@ impl ServiceRegistry {
         if token.is_some() && token != service.token {
             // Initialize or get registered token map
             let token_balances = self
-                .token_balances
+                .all_token_balances
                 // Get token map
                 .entry(token.clone().unwrap())
                 // or create a new one if not
@@ -298,8 +298,18 @@ impl ServiceRegistry {
                 token_balances.set(service_owner, Some(0));
                 token_balances.flush();
             }
-            self.token_balances.flush();
-            service.token = token;
+            self.all_token_balances.flush();
+            service.token = token.clone();
+        }
+
+        // Manage slashed funds map
+        let mut slashed_token = "near.near".parse().unwrap();
+        if token.is_some() {
+            slashed_token = token.unwrap();
+        }
+        if !self.slashed_funds.contains_key(&slashed_token) {
+            self.slashed_funds.set(slashed_token, Some(0));
+            self.slashed_funds.flush();
         }
 
         // Check for the correct threshold: no less than ceil((n * 2 + 1) / 3) of all the agent instances combined
@@ -497,7 +507,7 @@ impl ServiceRegistry {
         } else {
             // Get token balance for the service owner and reduce it by a security deposit value
             if let Some(b) = self
-                .token_balances
+                .all_token_balances
                 .get_mut(&service.token.clone().unwrap())
                 .unwrap_or_else(|| env::panic_str("Token not registered"))
                 .get_mut(&owner_id)
@@ -602,7 +612,7 @@ impl ServiceRegistry {
         if service.token.is_some() {
             // Get token balance for the operator and reduce it by a total bond value
             if let Some(b) = self
-                .token_balances
+                .all_token_balances
                 .get_mut(&service.token.clone().unwrap())
                 .unwrap_or_else(|| env::panic_str("Token not registered"))
                 .get_mut(&operator)
@@ -789,8 +799,6 @@ impl ServiceRegistry {
         success
     }
 
-    // TODO: needs to be payable?
-    #[payable]
     pub fn slash(
         &mut self,
         agent_instances: Vec<AccountId>,
@@ -809,6 +817,12 @@ impl ServiceRegistry {
         // Only the multisig of a correspondent address can slash its agent instances
         require!(service.multisig.clone().unwrap() == env::predecessor_account_id());
 
+        // Get service token
+        let token = service.token.clone().unwrap();
+
+        // Get slashed funds map
+        let slashed_funds = self.slashed_funds.get_mut(&token).unwrap();
+
         // Traverse all agent instances
         for i in 0..agent_instances.len() {
             let amount = amounts[i];
@@ -822,10 +836,10 @@ impl ServiceRegistry {
             // Slash the balance of the operator, make sure it does not go below zero
             if amount >= balance {
                 // We cannot add to the slashed amount more than the balance of the operator
-                self.slashed_funds = self.slashed_funds.saturating_add(balance.into());
+                *slashed_funds = (*slashed_funds).saturating_add(balance.into());
                 balance = 0;
             } else {
-                self.slashed_funds = self.slashed_funds.saturating_add(amount.into());
+                *slashed_funds = (*slashed_funds).saturating_add(amount.into());
                 balance = balance.saturating_sub(amount.into());
             }
 
@@ -975,45 +989,116 @@ impl ServiceRegistry {
         // TODO: event
     }
 
-    pub fn withdraw(&mut self, token: AccountId) {
+    // TODO Shall this be payable as 1 yocto is needed for?
+    pub fn drain(&mut self, token: AccountId) {
+        // Check the ownership
+        require!(self.owner == env::predecessor_account_id());
+
+        let amount = self.slashed_funds.get_mut(&token).unwrap();
+        let transfer_amount = *amount;
+
+        // Check for native token
+        if token == "near.near" {
+            // TODO: 1 or 0 here?
+            if transfer_amount > 1 {
+                *amount = 0;
+                Promise::new(env::predecessor_account_id()).transfer(NearToken::from_yoctonear(transfer_amount));
+            }
+        } else {
+            if transfer_amount > 0 {
+                *amount = 0;
+                ext_ft_core::ext(token)
+                    .with_static_gas(CALL_GAS)
+                    .ft_transfer(env::predecessor_account_id(), U128::from(transfer_amount), None);
+            }
+        }
+
+        // TODO: event
+    }
+
+    pub fn withdraw(&mut self, token: AccountId, amount: u128, withdraw_storage: bool) {
         // Get the sender balance
         let sender_id = env::predecessor_account_id();
         if let Some(b) = self
-            .token_balances
+            .all_token_balances
             .get_mut(&token)
             .unwrap_or_else(|| env::panic_str("Token not registered"))
             .get_mut(&sender_id)
         {
             // Set the balance to zero
-            let refund = *b;
-            *b = 0;
+            require!(*b >= amount, "Insufficient token balance");
+            *b = (*b).saturating_sub(amount);
 
             // Send tokens back to the sender
-            ext_ft_core::ext(token)
+            ext_ft_core::ext(token.clone())
                 .with_static_gas(CALL_GAS)
-                .ft_transfer(sender_id.clone(), U128::from(refund), None);
+                .ft_transfer(sender_id.clone(), U128::from(amount), None);
 
-            // Return excess of amount
-            self.refund_deposit_to_account(0, 0, sender_id.clone(), false);
+            // Withdraw token storage for the sender on request
+            if withdraw_storage {
+                self.storage_withdraw(token);
+            }
         } else {
             // Fail otherwise
             env::panic_str("Sender not registered");
         }
     }
 
-    // TODO Shall this be payable as 1 yocto is needed for?
-    pub fn drain(&mut self) {
-        // Check the ownership
-        require!(self.owner == env::predecessor_account_id());
+    // Call by the operator
+    #[payable]
+    pub fn storage_deposit(&mut self, account_id: Option<AccountId>, token: AccountId) {
+        let initial_storage_usage = env::storage_usage();
 
-        let amount = self.slashed_funds;
-        // TODO: 1 or 0 here?
-        if amount > 1 {
-            self.slashed_funds = 0;
-            Promise::new(env::predecessor_account_id()).transfer(NearToken::from_yoctonear(amount));
+        let sender_id = account_id.unwrap_or_else(env::predecessor_account_id);
+
+        // Check the token field and register account, if required
+        // Initialize or get registered token map
+        let token_balances = self
+            .all_token_balances
+            // Get token map
+            .entry(token)
+            // or create a new one if not
+            .or_insert(LookupMap::new(StorageKey::TokenBalances));
+
+        // Check if the service owner is registered
+        if !token_balances.contains_key(&sender_id) {
+            token_balances.set(sender_id.clone(), Some(0));
+            token_balances.flush();
+        }
+        self.all_token_balances.flush();
+
+        let storage = env::storage_usage() - initial_storage_usage;
+        // Pay for the storage and refund excessive amount
+        self.refund_deposit_to_account(storage, 0, sender_id, true);
+    }
+
+    pub fn storage_withdraw(&mut self, token: AccountId) {
+        let initial_storage_usage = env::storage_usage();
+
+        let account_id = env::predecessor_account_id();
+
+        // Get the token balance
+        if let Some(b) = self
+            .all_token_balances
+            .get_mut(&token)
+            .unwrap_or_else(|| env::panic_str("Token not registered"))
+            .get_mut(&account_id)
+        {
+            // The balance must be zero
+            require!(*b == 0, "Token balance must be zero");
+
+        } else {
+            // Fail otherwise
+            env::panic_str("Sender not registered");
         }
 
-        // TODO: event
+        // Remove account storage associated with the token
+        self.all_token_balances.get_mut(&token).unwrap().remove(&account_id);
+        self.all_token_balances.flush();
+
+        let storage = initial_storage_usage - env::storage_usage();
+        // Send the storage released cost back to the sender
+        self.refund_deposit_to_account(storage, 0, account_id, false);
     }
 
     /// @param setCheck True if the whitelisting check is needed, and false otherwise.
@@ -1084,64 +1169,6 @@ impl ServiceRegistry {
         let storage = env::storage_usage() - initial_storage_usage;
         // Pay for the storage and refund excessive amount
         self.refund_deposit_to_account(storage, 0, env::predecessor_account_id(), true);
-    }
-
-    // Call by the operator
-    #[payable]
-    pub fn storage_deposit(&mut self, account_id: Option<AccountId>, token: AccountId) {
-        let initial_storage_usage = env::storage_usage();
-
-        let sender_id = account_id.unwrap_or_else(env::predecessor_account_id);
-
-        // Check the token field and register account, if required
-        // Initialize or get registered token map
-        let token_balances = self
-            .token_balances
-            // Get token map
-            .entry(token)
-            // or create a new one if not
-            .or_insert(LookupMap::new(StorageKey::TokenBalances));
-
-        // Check if the service owner is registered
-        if !token_balances.contains_key(&sender_id) {
-            token_balances.set(sender_id.clone(), Some(0));
-            token_balances.flush();
-        }
-        self.token_balances.flush();
-
-        let storage = env::storage_usage() - initial_storage_usage;
-        // Pay for the storage and refund excessive amount
-        self.refund_deposit_to_account(storage, 0, sender_id, true);
-    }
-
-    #[payable]
-    pub fn storage_withdraw(&mut self, token: AccountId) {
-        let initial_storage_usage = env::storage_usage();
-
-        let account_id = env::predecessor_account_id();
-
-        // Get the token balance
-        if let Some(b) = self
-            .token_balances
-            .get_mut(&token)
-            .unwrap_or_else(|| env::panic_str("Token not registered"))
-            .get_mut(&account_id)
-        {
-            // The balance must be zero
-            require!(*b == 0);
-
-        } else {
-            // Fail otherwise
-            env::panic_str("Sender not registered");
-        }
-
-        // Remove account storage associated with the token
-        self.token_balances.get_mut(&token).unwrap().remove(&account_id);
-        self.token_balances.flush();
-
-        let storage = initial_storage_usage - env::storage_usage();
-        // Send the storage released cost back to the sender
-        self.refund_deposit_to_account(storage, 0, account_id, false);
     }
 
     pub fn change_upgrade_hash(&mut self, hash: Vec<u8>) {
@@ -1286,8 +1313,8 @@ impl ServiceRegistry {
         self.balance
     }
 
-    pub fn get_registry_slashed_funds(&self) -> u128 {
-        self.slashed_funds
+    pub fn get_registry_slashed_funds(&self, token: AccountId) -> u128 {
+        *self.slashed_funds.get(&token).unwrap()
     }
 
     pub fn get_storage_usage(&self) -> u64 {
@@ -1368,11 +1395,11 @@ impl Default for ServiceRegistry {
                 reference_hash: None,
             }),
             agent_instance_operators: LookupMap::new(StorageKey::AgentInstanceOperator),
-            token_balances: LookupMap::new(StorageKey::CustomToken),
+            all_token_balances: LookupMap::new(StorageKey::CustomToken),
             paused: Default::default(),
             multisig_factory: "".parse().unwrap(),
             balance: Default::default(),
-            slashed_funds: Default::default(),
+            slashed_funds: LookupMap::new(StorageKey::TokenBalances),
             upgrade_hash: Vec::new()
         }
     }
@@ -1401,11 +1428,12 @@ impl FungibleTokenReceiver for ServiceRegistry {
 
         // Get token balance the sender
         if let Some(b) = self
-            .token_balances
+            .all_token_balances
             .get_mut(&token)
             .unwrap_or_else(|| env::panic_str("Token not registered"))
             .get_mut(&sender_id)
         {
+            // TODO saturated
             // Increase for the provided amount
             *b += amount.0;
         } else {
