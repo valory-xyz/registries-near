@@ -17,6 +17,51 @@ Look at: https://github.com/blocksecteam/rustle/blob/main/docs/detectors/reentra
 ```            
 *b += amount.0;
 ```
+#### missing check of sender != receiver
+no
+#### incorrect type used in parameters or return values
+no
+#### changes to collections are not saved
+no
+#### find nft_transfer without check of approval id
+no
+#### find approve or revoke functions without owner check
+no
+#### precision loss due to incorrect operation order
+no
+#### rounding without specifying ceil or floor
+no
+#### panic in callback function may lock contract
+```
+pub fn create_multisig_callback
+```
+#### no assert_one_yocto in privileged function
+```
+pub fn set_operators_statuses
+owner_or_self
+WIP!!
+```
+
+WIP
+#### duplicate id uses in collections
+
+#### no panic on unregistered transfer receivers
+
+#### find all unimplemented NEP interface
+
+#### missing check of prepaid gas in ft_transfer_call
+
+#### macro #[private] used in non-callback function
+
+#### function result not used or checked
+
+#### no upgrade function in contract
+
+#### tautology used in conditional branch
+
+#### missing balance check for storage expansion
+
+#### missing balance check before storage unregister
 
 
 
@@ -92,6 +137,37 @@ pub fn change_owner(&mut self, new_owner: AccountId)
 #### set_operators_statuses check service_id
 ```
 require!(self.services.contains_key(&service_id), "Service not found");
+```
+
+#### return vs panic in ft_on_transfer?
+```
+fn ft_on_transfer(
+        &mut self,
+        sender_id: AccountId,
+        amount: U128,
+        msg: String,
+    ) -> PromiseOrValue<U128> {
+        let token = env::predecessor_account_id();
+
+        // Get token balance the sender
+        if let Some(b) = self
+            .all_token_balances
+            .get_mut(&token)
+            .unwrap_or_else(|| env::panic_str("Token not registered"))
+            .get_mut(&sender_id)
+        {
+            // TODO saturated
+            // Increase for the provided amount
+            *b += amount.0;
+            log!("Increased the token amount! {}", amount.0);
+
+            // No tokens will be returned
+            PromiseOrValue::Value(U128::from(0))
+        } else {
+            // otherwise return
+            PromiseOrValue::Value(U128::from(amount.0))
+        }
+    }
 ```
 
 ### Low issue
