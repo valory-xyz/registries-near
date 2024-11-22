@@ -9,7 +9,7 @@ use near_sdk::json_types::{Base58PublicKey, U128};
 use near_sdk::{
     env, near, require, AccountId, BorshStorageKey, Promise, PromiseOrValue, StorageUsage, Gas, PromiseError, NearToken, log
 };
-use near_sdk::store::{LookupMap, Vector};
+use near_sdk::store::{LookupMap, Vector, iterable_set::IterableSet};
 use near_sdk::ext_contract;
 
 #[derive(Serialize, Deserialize, PartialEq)]
@@ -60,8 +60,7 @@ pub struct AgentParams {
 #[near(serializers=[borsh])]
 pub struct OperatorData {
     pub balance: u128,
-    pub instances: Vector<AccountId>,
-    pub whitelisted: bool
+    pub instances: Vector<AccountId>
 }
 
 #[near(serializers=[borsh])]
@@ -94,11 +93,14 @@ pub struct Service {
     // Map of operators in the service and their corresponding OperatorData struct
     pub operators: LookupMap<AccountId, OperatorData>,
     // Operators check flag
-    pub operators_check: bool
+    pub operators_check: bool,
+    // Restricted operators set
+    pub restricted_operators: IterableSet<AccountId>
 }
 
 const CALL_GAS: Gas = Gas::from_tgas(5);
 const CREATE_CALL_GAS: Gas = Gas::from_tgas(100);
+const NATIVE_TOKEN: &str = "near.near";
 
 #[near(contract_state)]
 pub struct ServiceRegistry {
@@ -130,6 +132,7 @@ enum StorageKey {
     AgentInstancePerAgentId,
     ConfigHash,
     OperatorData,
+    RestrictedOperator,
     AgentInstanceOperator,
     CustomToken,
     TokenBalances
@@ -163,7 +166,8 @@ impl ServiceRegistry {
         }
     }
 
-    fn refund_deposit_to_account(&self, storage_used: u64, service_deposit: u128, account_id: AccountId, deposit_in: bool) {
+    #[private]
+    pub fn refund_deposit_to_account(&self, storage_used: u64, service_deposit: u128, account_id: AccountId, deposit_in: bool) {
         log!("storage used: {}", storage_used);
         let near_deposit = NearToken::from_yoctonear(service_deposit);
         let mut required_cost = env::storage_byte_cost().saturating_mul(storage_used.into());
@@ -188,19 +192,8 @@ impl ServiceRegistry {
         }
     }
 
-    pub fn change_owner(&mut self, new_owner: AccountId) {
-        // Check the ownership
-        require!(self.owner == env::predecessor_account_id());
-
-        // Check account validity
-        require!(env::is_valid_account_id(new_owner.as_bytes()));
-
-        self.owner = new_owner;
-
-        // TODO: event
-    }
-
-    fn check_service_params(
+    #[private]
+    pub fn check_service_params(
         &self,
         config_hash: [u8; 32],
         agent_ids: Vec<u32>,
@@ -226,7 +219,8 @@ impl ServiceRegistry {
         require!(agent_ids.into_iter().all(|id| id > 0));
     }
 
-    fn fill_service_params(
+    #[private]
+    pub fn fill_service_params(
         &mut self,
         service_owner: AccountId,
         service_id: u32,
@@ -303,7 +297,7 @@ impl ServiceRegistry {
         }
 
         // Manage slashed funds map
-        let mut slashed_token = "near.near".parse().unwrap();
+        let mut slashed_token = (String::from(NATIVE_TOKEN)).parse().unwrap();
         if token.is_some() {
             slashed_token = token.unwrap();
         }
@@ -336,6 +330,89 @@ impl ServiceRegistry {
             service.config_hashes.push(config_hash);
             service.config_hashes.flush();
         }
+    }
+
+    #[private]
+    pub fn check_members(
+        &self,
+        #[callback_result] call_result: Result<Vec<MultisigMember>, PromiseError>,
+    ) -> u64 {
+        // Check if the promise succeeded by calling the method outlined in external.rs
+        if call_result.is_err() {
+            env::panic_str("Multisig check failed");
+        }
+
+        call_result.unwrap().len() as u64
+    }
+
+    #[private] // Public - but only callable by env::current_account_id()
+    pub fn create_multisig_callback(
+        &mut self,
+        service_id: u32,
+        name_multisig: AccountId,
+        #[callback_result] call_result: Result<(), PromiseError>,
+    ) {
+        // Check if the promise succeeded by calling the method outlined in external.rs
+        if call_result.is_err() {
+            env::panic_str("Multisig creation failed");
+
+            // TODO refund
+        }
+
+        // Get the service, record its multisig and update state
+        let service = self.services.get_mut(&service_id).unwrap();
+        service.multisig = Some(name_multisig);
+        service.state = ServiceState::Deployed;
+
+        // TODO: event
+    }
+
+    #[private]
+    pub fn update_multisig_callback(
+        &mut self,
+        service_id: u32,
+        name_multisig: AccountId,
+        agent_instances: Vec<MultisigMember>,
+        #[callback_result] call_result: Result<Vec<MultisigMember>, PromiseError>,
+    ) -> bool {
+        // Check if the promise succeeded by calling the method outlined in external.rs
+        if call_result.is_err() {
+            return false;
+        }
+
+        // Get the service, record its multisig and update state
+        let service = self.services.get_mut(&service_id).unwrap();
+
+        // Check agent instances vs multisig members
+        let multisig_members = call_result.unwrap();
+
+        // Multisig members' length must match agent instances'
+        if agent_instances.len() == multisig_members.len() {
+            let matching = agent_instances.iter().zip(multisig_members.iter()).all(|(ai, mm)| ai == mm);
+            if matching {
+                service.multisig = Some(name_multisig);
+                // Update service state
+                service.state = ServiceState::Deployed;
+
+                // TODO: event
+
+                return true;
+            }
+        }
+
+        false
+    }
+
+    pub fn change_owner(&mut self, new_owner: AccountId) {
+        // Check the ownership
+        require!(self.owner == env::predecessor_account_id());
+
+        // Check account validity
+        require!(env::is_valid_account_id(new_owner.as_bytes()));
+
+        self.owner = new_owner;
+
+        // TODO: event
     }
 
     #[payable]
@@ -390,7 +467,8 @@ impl ServiceRegistry {
                 agent_params: LookupMap::new(StorageKey::AgentParam),
                 agent_instances: LookupMap::new(StorageKey::AgentInstance),
                 operators: LookupMap::new(StorageKey::OperatorData),
-                operators_check: false
+                operators_check: false,
+                restricted_operators: IterableSet::new(StorageKey::RestrictedOperator)
             }
         );
 
@@ -548,6 +626,9 @@ impl ServiceRegistry {
         // Check the service state
         require!(service.state == ServiceState::ActiveRegistration);
 
+        // Check that operator is not restricted
+        require!(!service.operators_check || !service.restricted_operators.contains(&operator), "Operator is restricted");
+
         // Initialize or get operator struct
         let operator_data = service
             .operators
@@ -556,8 +637,7 @@ impl ServiceRegistry {
             // or create a new one if not
             .or_insert(OperatorData{
                 balance: 0 as u128,
-                instances: Vector::new(StorageKey::AgentInstance),
-                whitelisted: true
+                instances: Vector::new(StorageKey::AgentInstance)
             });
 
         // Traverse agent instances and corresponding agent ids
@@ -655,19 +735,6 @@ impl ServiceRegistry {
             )
     }
 
-    #[private]
-    pub fn check_members(
-        &self,
-        #[callback_result] call_result: Result<Vec<MultisigMember>, PromiseError>,
-    ) -> u64 {
-        // Check if the promise succeeded by calling the method outlined in external.rs
-        if call_result.is_err() {
-            env::panic_str("Multisig check failed");
-        }
-
-        call_result.unwrap().len() as u64
-    }
-
     // TODO: needs to be payable?
     #[payable]
     pub fn deploy(
@@ -722,7 +789,7 @@ impl ServiceRegistry {
                 )
         } else {
             // Deposit must be zero in this scenario
-            require!(env::attached_deposit() == NearToken::from_yoctonear(0), "Deposit is not required");
+            require!(env::attached_deposit() == NearToken::from_yoctonear(1), "Deposit is not required");
 
             // Update multisig with the new owners set
             // Get multisig owners
@@ -737,67 +804,6 @@ impl ServiceRegistry {
                        .update_multisig_callback(service_id, name_multisig.clone(), agent_instances)
                 )
         }
-    }
-
-    #[private] // Public - but only callable by env::current_account_id()
-    pub fn create_multisig_callback(
-        &mut self,
-        service_id: u32,
-        name_multisig: AccountId,
-        #[callback_result] call_result: Result<(), PromiseError>,
-    ) {
-        // Check if the promise succeeded by calling the method outlined in external.rs
-        if call_result.is_err() {
-            env::panic_str("Multisig creation failed");
-
-            // TODO refund
-        }
-
-        // Get the service, record its multisig and update state
-        let service = self.services.get_mut(&service_id).unwrap();
-        service.multisig = Some(name_multisig);
-        service.state = ServiceState::Deployed;
-
-        // TODO: event
-    }
-
-    #[private]
-    pub fn update_multisig_callback(
-        &mut self,
-        service_id: u32,
-        name_multisig: AccountId,
-        agent_instances: Vec<MultisigMember>,
-        #[callback_result] call_result: Result<Vec<MultisigMember>, PromiseError>,
-    ) -> bool {
-        // Check if the promise succeeded by calling the method outlined in external.rs
-        if call_result.is_err() {
-            env::panic_str("Multisig update failed");
-
-            // TODO refund
-        }
-
-        // Get the service, record its multisig and update state
-        let service = self.services.get_mut(&service_id).unwrap();
-
-        let mut success = false;
-        // Check agent instances vs multisig members
-        let multisig_members = call_result.unwrap();
-        let matching = agent_instances.iter().zip(multisig_members.iter()).filter(|&(ai, mm)| ai == mm).count();
-
-        //let matching = agent_instances.iter().zip(multisig_members.iter()).filter(|&(ai, mm)| match ai {MultisigMember::Account(value) => value == mm, _ => {false}}).count();
-        if matching == agent_instances.len() && matching == multisig_members.len() {
-            service.multisig = Some(name_multisig);
-            // Update service state
-            service.state = ServiceState::Deployed;
-            success = true;
-        }
-
-        // Revert if the multisig members comparison fails
-        require!(success);
-
-        // TODO: event
-
-        success
     }
 
     pub fn slash(
@@ -999,7 +1005,8 @@ impl ServiceRegistry {
         let transfer_amount = *amount;
 
         // Check for native token
-        if token == "near.near" {
+        let naive_token: AccountId = (String::from(NATIVE_TOKEN)).parse().unwrap();
+        if token == naive_token {
             // TODO: 1 or 0 here?
             if transfer_amount > 1 {
                 *amount = 0;
@@ -1149,20 +1156,13 @@ impl ServiceRegistry {
 
         // Set operators statuses
         for i in 0..operators.len() {
-            // Initialize or get operator struct
-            let operator_data = service
-                .operators
-                // Get operator struct
-                .entry(operators[i].clone())
-                // or create a new one if not
-                .or_insert(OperatorData{
-                    balance: 0 as u128,
-                    instances: Vector::new(StorageKey::AgentInstance),
-                    whitelisted: true
-                });
-            operator_data.whitelisted = statuses[i];
+            if statuses[i] {
+                service.restricted_operators.insert(operators[i].clone());
+            } else {
+                service.restricted_operators.remove(&operators[i]);
+            }
         }
-        service.operators.flush();
+        service.restricted_operators.flush();
 
         // TODO: event
         //emit OperatorsWhitelistUpdated(msg.sender, serviceId, operators, statuses, setCheck);
@@ -1295,7 +1295,6 @@ impl ServiceRegistry {
     }
 
     pub fn is_operator_whitelisted(&self, service_id: u32, operator: AccountId) -> bool {
-        let mut status = true;
         // Get the service owner address
         let owner_id = self.tokens
             .owner_by_id
@@ -1305,10 +1304,10 @@ impl ServiceRegistry {
         // Check the operator whitelisting status, if applied by the service owner
         let operators_check = self.services.get(&service_id).unwrap().operators_check;
         if owner_id != operator && operators_check {
-            status = self.services.get(&service_id).unwrap().operators.get(&operator).unwrap().whitelisted;
+            return self.services.get(&service_id).unwrap().restricted_operators.contains(&operator);
         }
 
-        status
+        true
     }
     pub fn get_registry_balance(&self) -> u128 {
         self.balance

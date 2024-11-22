@@ -19,6 +19,8 @@ https://docs.rs/cargo-audit/latest/cargo_audit/
 cargo install cargo-audit
 cargo-audit audit > audits/internal/analysis/cargo-audit.txt
 ```
+[x] Fixed
+
 ##### cargo clippy 
 https://github.com/rust-lang/rust-clippy
 ```
@@ -69,8 +71,6 @@ This can be implemented in the contract by adding assert_one_yocto, which is rec
 1. pub fn set_paused
 2. pub fn change_upgrade_hash or rewrite condition owner_or_self to only_self
 3. pub fn update
-4. pub fn activate_registration
-5. pub fn register_agents
 6. pub fn slash
 7. pub fn terminate
 8. pub fn drain
@@ -131,7 +131,7 @@ impl Contract {
 }
 ```
 
-### Critical issue 2. whitelisting setupped, but not used 
+### Critical issue 2. whitelisting is set up, but not used 
 ```
     /// @param setCheck True if the whitelisting check is needed, and false otherwise.
     // Call by the service owner
@@ -234,20 +234,27 @@ fn ft_on_transfer(
     pub fn refund_deposit_to_account
 ```
 better "private pub fn" vs "fn". To discussing
+[x] Fixed
+
 #### better code update_multisig_callback?
 ```
 let matching = agent_instances.iter().zip(multisig_members.iter()).all(|(ai, mm)| ai == mm);
 ```
+[x] Fixed
+
 #### better code drain?
 ```
 const NATIVE_TOKEN: &str = "near";
 ```
+[x] Fixed
+
 ### Low issue (doc)
 1. Fixing README.md - `Build the code:` - incorrect. 
 2. Fixing README.md - remove sandbox part as outdated. 
 3. Fixing setup-env.sh to actual versions if needed
 4. Ref FungibleToken in README. 
 5. Group all private functions in one place. 
+[x] Fixed
 
 
 
