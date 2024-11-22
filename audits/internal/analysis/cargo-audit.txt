@@ -1,0 +1,42 @@
+[0m[0m[1m[32m    Fetching[0m advisory database from `https://github.com/RustSec/advisory-db.git`
+[0m[0m[1m[32m      Loaded[0m 687 security advisories (from /home/andrey/.cargo/advisory-db)
+[0m[0m[1m[32m    Updating[0m crates.io index
+[0m[0m[1m[32m    Scanning[0m Cargo.lock for vulnerabilities (56 crate dependencies)
+[0m[0m[1m[33mCrate:    [0m proc-macro-error
+[0m[0m[1m[33mVersion:  [0m 1.0.4
+[0m[0m[1m[33mWarning:  [0m unmaintained
+[0m[0m[1m[33mTitle:    [0m proc-macro-error is unmaintained
+[0m[0m[1m[33mDate:     [0m 2024-09-01
+[0m[0m[1m[33mID:       [0m RUSTSEC-2024-0370
+[0m[0m[1m[33mURL:      [0m https://rustsec.org/advisories/RUSTSEC-2024-0370
+[0m[0m[1m[33mDependency tree:
+[0mproc-macro-error 1.0.4
+└── syn_derive 0.1.8
+    └── borsh-derive 1.5.1
+        └── borsh 1.5.1
+            ├── near-token 0.3.0
+            │   └── near-sdk 5.5.0
+            │       ├── registries_near 0.1.0
+            │       └── near-contract-standards 5.5.0
+            │           └── registries_near 0.1.0
+            ├── near-sdk 5.5.0
+            ├── near-gas 0.3.0
+            │   └── near-sdk 5.5.0
+            └── near-account-id 1.0.0
+                └── near-sdk 5.5.0
+
+[0m[0m[1m[33mCrate:    [0m wee_alloc
+[0m[0m[1m[33mVersion:  [0m 0.4.5
+[0m[0m[1m[33mWarning:  [0m unmaintained
+[0m[0m[1m[33mTitle:    [0m wee_alloc is Unmaintained
+[0m[0m[1m[33mDate:     [0m 2022-05-11
+[0m[0m[1m[33mID:       [0m RUSTSEC-2022-0054
+[0m[0m[1m[33mURL:      [0m https://rustsec.org/advisories/RUSTSEC-2022-0054
+[0m[0m[1m[33mDependency tree:
+[0mwee_alloc 0.4.5
+└── near-sdk 5.5.0
+    ├── registries_near 0.1.0
+    └── near-contract-standards 5.5.0
+        └── registries_near 0.1.0
+
+[0m[0m[1m[33mwarning:[0m 2 allowed warnings found
