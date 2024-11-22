@@ -1,0 +1,90 @@
+registries_near v0.1.0 (/home/andrey/valory/registries-near)
+├── hex v0.4.3
+├── near-contract-standards v5.5.0
+│   └── near-sdk v5.5.0
+│       ├── base64 v0.22.1
+│       ├── borsh v1.5.1
+│       │   └── borsh-derive v1.5.1 (proc-macro)
+│       │       ├── once_cell v1.19.0
+│       │       ├── proc-macro-crate v3.2.0
+│       │       │   └── toml_edit v0.22.22
+│       │       │       ├── indexmap v2.5.0
+│       │       │       │   ├── equivalent v1.0.1
+│       │       │       │   └── hashbrown v0.14.5
+│       │       │       ├── toml_datetime v0.6.8
+│       │       │       └── winnow v0.6.20
+│       │       ├── proc-macro2 v1.0.86
+│       │       │   └── unicode-ident v1.0.5
+│       │       ├── quote v1.0.37
+│       │       │   └── proc-macro2 v1.0.86 (*)
+│       │       ├── syn v2.0.77
+│       │       │   ├── proc-macro2 v1.0.86 (*)
+│       │       │   ├── quote v1.0.37 (*)
+│       │       │   └── unicode-ident v1.0.5
+│       │       └── syn_derive v0.1.8 (proc-macro)
+│       │           ├── proc-macro-error v1.0.4
+│       │           │   ├── proc-macro-error-attr v1.0.4 (proc-macro)
+│       │           │   │   ├── proc-macro2 v1.0.86 (*)
+│       │           │   │   └── quote v1.0.37 (*)
+│       │           │   │   [build-dependencies]
+│       │           │   │   └── version_check v0.9.4
+│       │           │   ├── proc-macro2 v1.0.86 (*)
+│       │           │   └── quote v1.0.37 (*)
+│       │           │   [build-dependencies]
+│       │           │   └── version_check v0.9.4
+│       │           ├── proc-macro2 v1.0.86 (*)
+│       │           ├── quote v1.0.37 (*)
+│       │           └── syn v2.0.77 (*)
+│       │   [build-dependencies]
+│       │   └── cfg_aliases v0.2.1
+│       ├── bs58 v0.5.1
+│       ├── near-account-id v1.0.0
+│       │   ├── borsh v1.5.1 (*)
+│       │   └── serde v1.0.147
+│       │       └── serde_derive v1.0.147 (proc-macro)
+│       │           ├── proc-macro2 v1.0.86 (*)
+│       │           ├── quote v1.0.37 (*)
+│       │           └── syn v1.0.103
+│       │               ├── proc-macro2 v1.0.86 (*)
+│       │               ├── quote v1.0.37 (*)
+│       │               └── unicode-ident v1.0.5
+│       ├── near-gas v0.3.0
+│       │   ├── borsh v1.5.1 (*)
+│       │   └── serde v1.0.147 (*)
+│       ├── near-sdk-macros v5.5.0 (proc-macro)
+│       │   ├── Inflector v0.11.4
+│       │   ├── darling v0.20.10
+│       │   │   ├── darling_core v0.20.10
+│       │   │   │   ├── fnv v1.0.7
+│       │   │   │   ├── ident_case v1.0.1
+│       │   │   │   ├── proc-macro2 v1.0.86 (*)
+│       │   │   │   ├── quote v1.0.37 (*)
+│       │   │   │   └── syn v2.0.77 (*)
+│       │   │   └── darling_macro v0.20.10 (proc-macro)
+│       │   │       ├── darling_core v0.20.10 (*)
+│       │   │       ├── quote v1.0.37 (*)
+│       │   │       └── syn v2.0.77 (*)
+│       │   ├── proc-macro2 v1.0.86 (*)
+│       │   ├── quote v1.0.37 (*)
+│       │   ├── serde v1.0.147
+│       │   │   └── serde_derive v1.0.147 (proc-macro) (*)
+│       │   ├── serde_json v1.0.87
+│       │   │   ├── itoa v1.0.4
+│       │   │   ├── ryu v1.0.11
+│       │   │   └── serde v1.0.147 (*)
+│       │   ├── strum v0.26.3
+│       │   ├── strum_macros v0.26.4 (proc-macro)
+│       │   │   ├── heck v0.5.0
+│       │   │   ├── proc-macro2 v1.0.86 (*)
+│       │   │   ├── quote v1.0.37 (*)
+│       │   │   ├── rustversion v1.0.9 (proc-macro)
+│       │   │   └── syn v2.0.77 (*)
+│       │   └── syn v2.0.77 (*)
+│       ├── near-sys v0.2.2
+│       ├── near-token v0.3.0
+│       │   ├── borsh v1.5.1 (*)
+│       │   └── serde v1.0.147 (*)
+│       ├── once_cell v1.19.0
+│       ├── serde v1.0.147 (*)
+│       └── serde_json v1.0.87 (*)
+└── near-sdk v5.5.0 (*)
