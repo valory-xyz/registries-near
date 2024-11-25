@@ -7,7 +7,8 @@ use near_sdk::borsh::BorshSerialize;
 use near_sdk::serde::{Serialize, Deserialize};
 use near_sdk::json_types::{Base58PublicKey, U128};
 use near_sdk::{
-    env, near, require, AccountId, BorshStorageKey, Promise, PromiseOrValue, StorageUsage, Gas, PromiseError, NearToken, log
+    env, near, require, AccountId, BorshStorageKey, Promise, PromiseOrValue, StorageUsage, Gas, PromiseError, NearToken,
+    log, assert_one_yocto
 };
 use near_sdk::store::{LookupMap, Vector, iterable_set::IterableSet};
 use near_sdk::ext_contract;
@@ -40,7 +41,8 @@ trait Multisig2 {
 
 
 #[near(serializers=[borsh])]
-#[derive(PartialEq, Clone)]
+#[derive(Serialize, Deserialize, PartialEq, Clone)]
+#[serde(crate = "near_sdk::serde", untagged)]
 pub enum ServiceState {
     NonExistent,
     PreRegistration,
@@ -99,8 +101,10 @@ pub struct Service {
 }
 
 const CALL_GAS: Gas = Gas::from_tgas(5);
+const TRANSFER_CALL_GAS: Gas = Gas::from_tgas(30);
 const CREATE_CALL_GAS: Gas = Gas::from_tgas(100);
 const NATIVE_TOKEN: &str = "near.near";
+const ONE_YOCTO: NearToken = NearToken::from_yoctonear(1);
 
 #[near(contract_state)]
 pub struct ServiceRegistry {
@@ -112,7 +116,7 @@ pub struct ServiceRegistry {
     agent_instance_operators: LookupMap<AccountId, AccountId>,
     paused: bool,
     multisig_factory: AccountId,
-    balance: u128,
+    native_balance: u128,
     slashed_funds: LookupMap<AccountId, u128>,
     // Contract upgrade hash
     upgrade_hash: Vec<u8>
@@ -160,7 +164,7 @@ impl ServiceRegistry {
             all_token_balances: LookupMap::new(StorageKey::CustomToken),
             paused: false,
             multisig_factory,
-            balance: 0 as u128,
+            native_balance: 0 as u128,
             slashed_funds: LookupMap::new(StorageKey::TokenBalances),
             upgrade_hash: Vec::new()
         }
@@ -339,7 +343,8 @@ impl ServiceRegistry {
     ) -> u64 {
         // Check if the promise succeeded by calling the method outlined in external.rs
         if call_result.is_err() {
-            env::panic_str("Multisig check failed");
+            env::log_str("Multisig check failed");
+            return 0;
         }
 
         call_result.unwrap().len() as u64
@@ -351,12 +356,11 @@ impl ServiceRegistry {
         service_id: u32,
         name_multisig: AccountId,
         #[callback_result] call_result: Result<(), PromiseError>,
-    ) {
+    ) -> bool {
         // Check if the promise succeeded by calling the method outlined in external.rs
         if call_result.is_err() {
-            env::panic_str("Multisig creation failed");
-
-            // TODO refund
+            log!("Multisig creation failed");
+            return false;
         }
 
         // Get the service, record its multisig and update state
@@ -365,6 +369,8 @@ impl ServiceRegistry {
         service.state = ServiceState::Deployed;
 
         // TODO: event
+
+        true
     }
 
     #[private]
@@ -377,6 +383,7 @@ impl ServiceRegistry {
     ) -> bool {
         // Check if the promise succeeded by calling the method outlined in external.rs
         if call_result.is_err() {
+            log!("Multisig update failed");
             return false;
         }
 
@@ -509,6 +516,8 @@ impl ServiceRegistry {
         agent_bonds: Vec<u128>,
         threshold: u32
     ) {
+        require!(env::attached_deposit() >= ONE_YOCTO, "Insufficient attached deposit");
+
         // Record current storage usage
         let initial_storage_usage = env::storage_usage();
 
@@ -580,9 +589,10 @@ impl ServiceRegistry {
 
         if service.token.is_none() {
             // Update registry native token balance
-            self.balance = self.balance.saturating_add(security_deposit.into());
+            self.native_balance = self.native_balance.saturating_add(security_deposit.into());
             self.refund_deposit_to_account(0, security_deposit, env::predecessor_account_id(), true);
         } else {
+            assert_one_yocto();
             // Get token balance for the service owner and reduce it by a security deposit value
             if let Some(b) = self
                 .all_token_balances
@@ -594,9 +604,8 @@ impl ServiceRegistry {
                 if *b < security_deposit {
                     env::panic_str("Not enough token deposit");
                 }
-                *b -= security_deposit;
+                *b = b.saturating_sub(security_deposit);
             } else {
-                // Fail otherwise
                 env::panic_str("Sender not registered");
             }
         }
@@ -611,6 +620,8 @@ impl ServiceRegistry {
         agent_instances: Vec<AccountId>,
         agent_ids: Vec<u32>
     ) {
+        require!(env::attached_deposit() >= ONE_YOCTO, "Insufficient attached deposit");
+
         // Check array lengths
         require!(agent_ids.len() == agent_instances.len());
 
@@ -701,9 +712,8 @@ impl ServiceRegistry {
                 if *b < total_bond {
                     env::panic_str("Not enough token deposit");
                 }
-                *b -= total_bond;
+                *b = b.saturating_sub(total_bond);
             } else {
-                // Fail otherwise
                 env::panic_str("Sender not registered");
             }
 
@@ -711,28 +721,13 @@ impl ServiceRegistry {
             total_bond = 0;
         } else {
             // Update native token balance
-            self.balance = self.balance.saturating_add(total_bond.into());
+            self.native_balance = self.native_balance.saturating_add(total_bond.into());
         }
 
         // Consume storage and bond cost and refund the rest
         self.refund_deposit_to_account(storage, total_bond, env::predecessor_account_id(), true);
 
         // TODO: event
-    }
-
-    pub fn get_multisig_members(&self, name_multisig: AccountId) -> Promise {
-        // Update multisig with the new owners set
-        // Get multisig owners
-        multisig2::ext(name_multisig)
-            .with_static_gas(CALL_GAS)
-            .get_members()
-            // Compare multisig owners with the set of agent instances
-            .then(
-               // Create a promise to callback update_multisig_callback
-               Self::ext(env::current_account_id())
-                   .with_static_gas(CALL_GAS)
-                   .check_members()
-            )
     }
 
     // TODO: needs to be payable?
@@ -782,14 +777,14 @@ impl ServiceRegistry {
                 .with_attached_deposit(env::attached_deposit())
                 .create(name_multisig.clone(), agent_instances, service.threshold as u64)
                 .then(
-                    // Create a promise to callback create_multisig_callback
+                    // Create a callback promise to create_multisig_callback
                     Self::ext(env::current_account_id())
                         .with_static_gas(CALL_GAS)
                         .create_multisig_callback(service_id, name_multisig.clone())
                 )
         } else {
-            // Deposit must be zero in this scenario
-            require!(env::attached_deposit() == NearToken::from_yoctonear(1), "Deposit is not required");
+            // Deposit must be zero in this scenario, just one yocto is required
+            assert_one_yocto();
 
             // Update multisig with the new owners set
             // Get multisig owners
@@ -798,7 +793,7 @@ impl ServiceRegistry {
                 .get_members()
                 // Compare multisig owners with the set of agent instances
                 .then(
-                   // Create a promise to callback update_multisig_callback
+                   // Create a callback promise to update_multisig_callback
                    Self::ext(env::current_account_id())
                        .with_static_gas(CALL_GAS)
                        .update_multisig_callback(service_id, name_multisig.clone(), agent_instances)
@@ -806,12 +801,15 @@ impl ServiceRegistry {
         }
     }
 
+    #[payable]
     pub fn slash(
         &mut self,
         agent_instances: Vec<AccountId>,
         amounts: Vec<u128>,
         service_id: u32
     ) {
+        assert_one_yocto();
+
         // Check array lengths
         require!(amounts.len() == agent_instances.len());
 
@@ -843,10 +841,10 @@ impl ServiceRegistry {
             // Slash the balance of the operator, make sure it does not go below zero
             if amount >= balance {
                 // We cannot add to the slashed amount more than the balance of the operator
-                *slashed_funds = (*slashed_funds).saturating_add(balance.into());
+                *slashed_funds = slashed_funds.saturating_add(balance.into());
                 balance = 0;
             } else {
-                *slashed_funds = (*slashed_funds).saturating_add(amount.into());
+                *slashed_funds = slashed_funds.saturating_add(amount.into());
                 balance = balance.saturating_sub(amount.into());
             }
 
@@ -857,12 +855,13 @@ impl ServiceRegistry {
         }
     }
 
-    // TODO: needs to be payable?
     #[payable]
     pub fn terminate(
         &mut self,
         service_id: u32
     ) {
+        assert_one_yocto();
+
         // Check for service owner
         let owner_id = self.tokens
             .owner_by_id
@@ -879,11 +878,13 @@ impl ServiceRegistry {
         // Check if the service is already terminated
         require!(service.state != ServiceState::PreRegistration && service.state != ServiceState::TerminatedBonded);
 
+        // Get security deposit as a refund
+        let mut refund = service.security_deposit;
+
         // Define the state of the service depending on the number of bonded agent instances
-        if service.num_agent_instances > 0 {
-            service.state = ServiceState::TerminatedBonded;
-        } else {
-            service.state = ServiceState::PreRegistration;
+        let mut state = ServiceState::TerminatedBonded;
+        if service.num_agent_instances == 0 {
+            state = ServiceState::PreRegistration;
         }
 
         // Remove agent instances data from agent params
@@ -893,27 +894,32 @@ impl ServiceRegistry {
             instances.flush();
         }
 
-        // Update registry balance
-        let mut refund = service.security_deposit;
-        self.balance = self.balance.saturating_sub(refund.into());
+        // Change the service state
+        service.state = state;
 
-        // TODO: Calculate refund of freed storage
-        //log!("initial storage usage {}", initial_storage_usage);
-        //log!("storage usage after {}", env::storage_usage());
+        // Calculate decreased storage
+        let storage = initial_storage_usage - env::storage_usage();
 
         if service.token.is_some() {
-            // Send the token refund back to the service owner
-            ext_ft_core::ext(service.token.clone().unwrap())
-                .with_static_gas(CALL_GAS)
-                .ft_transfer(owner_id, U128::from(refund), None);
+            // Get token balance for the service owner and increase it by a security deposit value
+            if let Some(b) = self
+                .all_token_balances
+                .get_mut(&service.token.clone().unwrap())
+                .unwrap()
+                .get_mut(&owner_id)
+            {
+                *b = b.saturating_add(refund);
+            } else {
+                env::panic_str("Sender not registered");
+            }
 
-            // Zero the refund since it has been already sent back
+            // Zero the security deposit as it is going to be returned via the withdraw method
             refund = 0;
+        } else {
+            self.native_balance = self.native_balance.saturating_sub(refund.into());
         }
 
-        // Decreased storage
-        let storage = initial_storage_usage - env::storage_usage();
-        // Send the deposit back to the service owner
+        // Send the storage deposit back to the service owner
         self.refund_deposit_to_account(storage, refund, env::predecessor_account_id(), false);
 
         // TODO: event
@@ -921,6 +927,8 @@ impl ServiceRegistry {
 
     #[payable]
     pub fn unbond(&mut self, service_id: u32) {
+        assert_one_yocto();
+
         // Get the operator account
         let operator = env::predecessor_account_id();
 
@@ -972,23 +980,26 @@ impl ServiceRegistry {
         service.operators.remove(&operator);
         service.operators.flush();
 
-        // Update registry balance
-        self.balance = self.balance.saturating_sub(refund.into());
+        // Update registry native balance
+        self.native_balance = self.native_balance.saturating_sub(refund.into());
 
         if service.token.is_some() {
-            // Send the token refund back to the service owner
-            ext_ft_core::ext(service.token.clone().unwrap())
-                .with_static_gas(CALL_GAS)
-                .ft_transfer(operator, U128::from(refund), None);
+            // Get token balance for the service owner and increase it by a security deposit value
+            if let Some(b) = self
+                .all_token_balances
+                .get_mut(&service.token.clone().unwrap())
+                .unwrap()
+                .get_mut(&operator)
+            {
+                *b = b.saturating_add(refund);
+            } else {
+                env::panic_str("Sender not registered");
+            }
 
-            // Zero the refund since it has been already sent back
+            // Zero the refund since it is going to be returned via the withdraw method
             refund = 0;
         }
 
-//         log!("initial storage usage {}", initial_storage_usage);
-//         log!("storage usage after {}", env::storage_usage());
-        // Increased storage
-        // TODO: need to correctly recalculate the storage decrease
         let storage = initial_storage_usage - env::storage_usage();
         // Refund storage, bond cost and the rest
         self.refund_deposit_to_account(storage, refund, env::predecessor_account_id(), false);
@@ -996,35 +1007,68 @@ impl ServiceRegistry {
         // TODO: event
     }
 
-    // TODO Shall this be payable as 1 yocto is needed for?
-    pub fn drain(&mut self, token: AccountId) {
+    #[payable]
+    pub fn drain(&mut self, token: AccountId) -> Promise {
+        assert_one_yocto();
+
         // Check the ownership
         require!(self.owner == env::predecessor_account_id());
 
-        let amount = self.slashed_funds.get_mut(&token).unwrap();
+        let amount = self.slashed_funds.get_mut(&token).unwrap_or_else(|| env::panic_str("Token not registered"));
         let transfer_amount = *amount;
+        *amount = 0;
 
         // Check for native token
         let naive_token: AccountId = (String::from(NATIVE_TOKEN)).parse().unwrap();
         if token == naive_token {
-            // TODO: 1 or 0 here?
-            if transfer_amount > 1 {
-                *amount = 0;
-                Promise::new(env::predecessor_account_id()).transfer(NearToken::from_yoctonear(transfer_amount));
-            }
+            require!(transfer_amount > 1, "Insufficient transfer balance");
+            return Promise::new(env::predecessor_account_id()).transfer(NearToken::from_yoctonear(transfer_amount));
         } else {
-            if transfer_amount > 0 {
-                *amount = 0;
-                ext_ft_core::ext(token)
-                    .with_static_gas(CALL_GAS)
-                    .ft_transfer(env::predecessor_account_id(), U128::from(transfer_amount), None);
-            }
+            require!(transfer_amount > 0, "Insufficient transfer balance");
+            let promise = ext_ft_core::ext(token.clone())
+                .with_attached_deposit(ONE_YOCTO)
+                .with_static_gas(TRANSFER_CALL_GAS)
+                .ft_transfer(env::predecessor_account_id(), U128::from(transfer_amount), None);
+
+            // Create a callback promise to ft_on_transfer_drain_callback
+            return promise.then(
+                Self::ext(env::current_account_id())
+                .with_static_gas(CALL_GAS)
+                .ft_on_transfer_drain_callback(token, transfer_amount)
+            );
         }
 
         // TODO: event
     }
 
-    pub fn withdraw(&mut self, token: AccountId, amount: u128, withdraw_storage: bool) {
+    #[private]
+    pub fn ft_on_transfer_drain_callback(
+        &mut self,
+        token: AccountId,
+        amount: u128,
+        #[callback_result] call_result: Result<(), PromiseError>
+    ) -> bool {
+        // Check if the promise has failed
+        if call_result.is_err() {
+            if let Some(b) = self
+                .slashed_funds
+                .get_mut(&token)
+            {
+                // Add the amount back as it was not transferred
+                *b = b.saturating_add(amount);
+            }
+
+            env::log_str("FT transfer failed");
+            return false;
+        }
+
+        true
+    }
+
+    #[payable]
+    pub fn withdraw(&mut self, token: AccountId) -> Promise {
+        assert_one_yocto();
+
         // Get the sender balance
         let sender_id = env::predecessor_account_id();
         if let Some(b) = self
@@ -1034,22 +1078,51 @@ impl ServiceRegistry {
             .get_mut(&sender_id)
         {
             // Set the balance to zero
-            require!(*b >= amount, "Insufficient token balance");
-            *b = (*b).saturating_sub(amount);
+            require!(*b > 0, "Zero token balance");
+            let amount = *b;
+            *b = 0;
 
             // Send tokens back to the sender
-            ext_ft_core::ext(token.clone())
-                .with_static_gas(CALL_GAS)
+            let promise = ext_ft_core::ext(token.clone())
+                .with_attached_deposit(ONE_YOCTO)
+                .with_static_gas(TRANSFER_CALL_GAS)
                 .ft_transfer(sender_id.clone(), U128::from(amount), None);
 
-            // Withdraw token storage for the sender on request
-            if withdraw_storage {
-                self.storage_withdraw(token);
-            }
+            // Create a callback promise to ft_on_transfer_withdraw_callback
+            return promise.then(
+                Self::ext(env::current_account_id())
+                .with_static_gas(CALL_GAS)
+                .ft_on_transfer_withdraw_callback(token, sender_id, amount)
+            );
         } else {
-            // Fail otherwise
             env::panic_str("Sender not registered");
         }
+    }
+
+    #[private]
+    pub fn ft_on_transfer_withdraw_callback(
+        &mut self,
+        token: AccountId,
+        sender_id: AccountId,
+        amount: u128,
+        #[callback_result] call_result: Result<(), PromiseError>
+    ) -> bool {
+        // Check if the promise has failed
+        if call_result.is_err() {
+            if let Some(b) = self
+                .all_token_balances
+                .get_mut(&token)
+                .and_then(|balances| balances.get_mut(&sender_id))
+            {
+                // Add the amount back as it was not transferred
+                *b = b.saturating_add(amount);
+            }
+
+            env::log_str("FT transfer on withdraw failed");
+            return false;
+        }
+
+        true
     }
 
     // Call by the operator
@@ -1080,7 +1153,9 @@ impl ServiceRegistry {
         self.refund_deposit_to_account(storage, 0, sender_id, true);
     }
 
+    #[payable]
     pub fn storage_withdraw(&mut self, token: AccountId) {
+        assert_one_yocto();
         let initial_storage_usage = env::storage_usage();
 
         let account_id = env::predecessor_account_id();
@@ -1094,9 +1169,7 @@ impl ServiceRegistry {
         {
             // The balance must be zero
             require!(*b == 0, "Token balance must be zero");
-
         } else {
-            // Fail otherwise
             env::panic_str("Sender not registered");
         }
 
@@ -1111,7 +1184,10 @@ impl ServiceRegistry {
 
     /// @param setCheck True if the whitelisting check is needed, and false otherwise.
     // Call by the service owner
+    #[payable]
     pub fn set_operators_check(&mut self, service_id: u32, set_check: bool) {
+        assert_one_yocto();
+
         // Check for service owner
         let owner_id = self.tokens
             .owner_by_id
@@ -1172,8 +1248,10 @@ impl ServiceRegistry {
         self.refund_deposit_to_account(storage, 0, env::predecessor_account_id(), true);
     }
 
+    #[payable]
     pub fn change_upgrade_hash(&mut self, hash: Vec<u8>) {
-        require!(self.owner_or_self());
+        assert_one_yocto();
+        require!(env::predecessor_account_id() == self.owner, "Owner Only");
 
         env::log_str(&format!(
             "ServiceRegistry/{}#{}: update_contract_hash: {}",
@@ -1209,8 +1287,26 @@ impl ServiceRegistry {
             .deploy_contract(code);
     }
 
+    // TODO Not needed as just for testing?
+    pub fn get_multisig_members(&self, name_multisig: AccountId) -> Promise {
+        // Update multisig with the new owners set
+        // Get multisig owners
+        multisig2::ext(name_multisig)
+            .with_static_gas(CALL_GAS)
+            .get_members()
+            // Compare multisig owners with the set of agent instances
+            .then(
+               // Create a callback promise to update_multisig_callback
+               Self::ext(env::current_account_id())
+                   .with_static_gas(CALL_GAS)
+                   .check_members()
+            )
+    }
+
+    #[payable]
     pub fn set_paused(&mut self, paused: bool) {
-        require!(self.owner_or_self());
+        assert_one_yocto();
+        require!(env::predecessor_account_id() == self.owner, "Owner Only");
         self.paused = if paused { true } else { false };
     }
 
@@ -1309,12 +1405,26 @@ impl ServiceRegistry {
 
         true
     }
-    pub fn get_registry_balance(&self) -> u128 {
-        self.balance
+    pub fn get_registry_native_balance(&self) -> u128 {
+        self.native_balance
     }
 
     pub fn get_registry_slashed_funds(&self, token: AccountId) -> u128 {
         *self.slashed_funds.get(&token).unwrap()
+    }
+
+    // Get account token balance
+    pub fn get_token_balance(&self, token: AccountId, account_id: AccountId) -> u128 {
+        if let Some(b) = self
+            .all_token_balances
+            .get(&token)
+            .unwrap_or_else(|| env::panic_str("Token not registered"))
+            .get(&account_id)
+        {
+            *b
+        } else {
+            env::panic_str("Sender not registered");
+        }
     }
 
     pub fn get_storage_usage(&self) -> u64 {
@@ -1335,7 +1445,7 @@ impl ServiceRegistry {
 //         icon: Option<String>,
 //     ) {
 //         // Only owner can change the metadata
-//         require!(self.owner_or_self());
+//         require!(env::predecessor_account_id() == self.owner, "Owner Only");
 //
 //         name.map(|name| self.name = name);
 //         symbol.map(|symbol| self.symbol = symbol);
@@ -1345,18 +1455,8 @@ impl ServiceRegistry {
 //         icon.map(|icon| self.icon = Some(icon));
 //     }
 
-    pub fn account_storage_usage(&self) -> StorageUsage {
-        self.tokens.extra_storage_in_bytes_per_token
-    }
-
-    /// Return true if the caller is either controller or self
-    pub fn owner_or_self(&self) -> bool {
-        let caller = env::predecessor_account_id();
-        caller == self.tokens.owner_id || caller == env::current_account_id()
-    }
-
     pub fn is_paused(&self) -> bool {
-        self.paused //&& !self.owner_or_self()
+        self.paused
     }
 
     // TODO convert to u32?
@@ -1398,7 +1498,7 @@ impl Default for ServiceRegistry {
             all_token_balances: LookupMap::new(StorageKey::CustomToken),
             paused: Default::default(),
             multisig_factory: "".parse().unwrap(),
-            balance: Default::default(),
+            native_balance: Default::default(),
             slashed_funds: LookupMap::new(StorageKey::TokenBalances),
             upgrade_hash: Vec::new()
         }
@@ -1426,19 +1526,17 @@ impl FungibleTokenReceiver for ServiceRegistry {
     ) -> PromiseOrValue<U128> {
         let token = env::predecessor_account_id();
 
-        // Get token balance the sender
+        // Get sender token balance
         if let Some(b) = self
             .all_token_balances
             .get_mut(&token)
-            .unwrap_or_else(|| env::panic_str("Token not registered"))
-            .get_mut(&sender_id)
+            .and_then(|balances| balances.get_mut(&sender_id))
         {
-            // TODO saturated
             // Increase for the provided amount
-            *b += amount.0;
+            *b = b.saturating_add(amount.0);
         } else {
-            // Fail otherwise
-            env::panic_str("Sender not registered");
+            env::log_str("Token is not registered for the sender");
+            return PromiseOrValue::Value(amount);
         }
 
         log!("Increased the token amount! {}", amount.0);

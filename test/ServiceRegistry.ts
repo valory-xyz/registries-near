@@ -270,7 +270,7 @@ test("Terminate service after its registration activation and check its state", 
     // Terminate service
     await deployer.call(contract, "terminate", {
         service_id: serviceId,
-    }, {attachedDeposit});
+    }, {attachedDeposit: "1"});
 
     // Check that the service is in the PreRegistration state
     let result = await contract.view("get_service_state", {service_id: serviceId});
@@ -308,7 +308,7 @@ test("Register agent instances by the operator and check service state and value
     //t.log(balanceBefore.toHuman());
 
     // Check registry balance after registration activation
-    let balance = await contract.view("get_registry_balance", {});
+    let balance = await contract.view("get_registry_native_balance", {});
     t.is(balance, agentBonds[0]);
 
     // Operator to register agent instance
@@ -331,7 +331,7 @@ test("Register agent instances by the operator and check service state and value
     t.deepEqual(result, [agentInstance.accountId]);
 
     // Check contract balance after registration
-    balance = await contract.view("get_registry_balance", {});
+    balance = await contract.view("get_registry_native_balance", {});
     t.is(balance, 2 * agentBonds[0]);
     //t.log(balance.toHuman());
 });
@@ -399,7 +399,7 @@ test("Unbond after service termination and check service state and values", asyn
     // Terminate service
     await deployer.call(contract, "terminate", {
         service_id: serviceId,
-    }, {attachedDeposit});
+    }, {attachedDeposit: "1"});
 
     storage = await contract.view("get_storage_usage", {});
     console.log("Storage usage before unbond:", storage);
@@ -408,7 +408,7 @@ test("Unbond after service termination and check service state and values", asyn
     console.log("Account balance before unbond", accountBalance.toString());
 
     // Check registry balance after registration activation
-    let balance = await contract.view("get_registry_balance", {});
+    let balance = await contract.view("get_registry_native_balance", {});
     t.is(balance, agentBonds[0]);
 
     // Check that the service is in the TerminatedBonded state
@@ -418,7 +418,7 @@ test("Unbond after service termination and check service state and values", asyn
     // Unbond operator
     await operator.call(contract, "unbond", {
         service_id: serviceId,
-    }, {attachedDeposit});
+    }, {attachedDeposit: "1"});
 
     storage = await contract.view("get_storage_usage", {});
     console.log("Storage usage after unbond:", storage);
@@ -443,7 +443,7 @@ test("Unbond after service termination and check service state and values", asyn
     //t.like(error.message, "Operator not found");
 
     // Check contract balance after registration
-    balance = await contract.view("get_registry_balance", {});
+    balance = await contract.view("get_registry_native_balance", {});
     t.is(balance, 0);
 });
 
@@ -531,7 +531,7 @@ test("Unbond after service termination and check service state and values", asyn
 //    console.log("Account balance before unbond", accountBalance.toString());
 //
 //    // Check registry balance after registration activation
-//    let balance = await contract.view("get_registry_balance", {});
+//    let balance = await contract.view("get_registry_native_balance", {});
 //    t.is(balance, agentBonds[0]);
 //
 //    // Check that the service is in the TerminatedBonded state
@@ -550,7 +550,7 @@ test("Unbond after service termination and check service state and values", asyn
 //    console.log("Account balance after unbond", accountBalance.toString());
 //
 //    // Check contract balance after registration
-//    balance = await contract.view("get_registry_balance", {});
+//    balance = await contract.view("get_registry_native_balance", {});
 //    t.is(balance, 0);
 //});
 //
@@ -624,7 +624,7 @@ test("Unbond after terminating the service with a token deposit", async t => {
     // Activate service agent registration
     await deployer.call(contract, "activate_registration", {
         service_id: serviceId,
-    }, {attachedDeposit});
+    }, {attachedDeposit: "1"});
 
     // Check that the service is in the ActiveRegistration state
     let result = await contract.view("get_service_state", {service_id: serviceId});
@@ -672,7 +672,7 @@ test("Unbond after terminating the service with a token deposit", async t => {
     // Terminate service
     await deployer.call(contract, "terminate", {
         service_id: serviceId,
-    }, {attachedDeposit});
+    }, {attachedDeposit: "1"});
 
     storage = await contract.view("get_storage_usage", {});
     console.log("Storage usage before unbond:", storage);
@@ -687,7 +687,7 @@ test("Unbond after terminating the service with a token deposit", async t => {
     // Unbond operator
     await operator.call(contract, "unbond", {
         service_id: serviceId,
-    }, {attachedDeposit});
+    }, {attachedDeposit: "1"});
 
     storage = await contract.view("get_storage_usage", {});
     console.log("Storage usage after unbond:", storage);
@@ -696,6 +696,41 @@ test("Unbond after terminating the service with a token deposit", async t => {
 //    console.log("Account balance after unbond", accountBalance.toString());
 
     // Check contract balance after registration
-    balance = await contract.view("get_registry_balance", {});
+    balance = await contract.view("get_registry_native_balance", {});
+    t.is(balance, 0);
+
+    // Check token balances for both service owner and operator
+    balance = await contract.view("get_token_balance", {token: token.accountId, account_id: deployer.accountId});
+    t.is(balance, agentBonds[0]);
+    balance = await contract.view("get_token_balance", {token: token.accountId, account_id: operator.accountId});
+    t.is(balance, agentBonds[0]);
+
+    balance = await token.view("ft_balance_of", {account_id: deployer.accountId});
+    console.log("Pure token balance before withdraw:", balance);
+
+    // Withdraw token balances
+    try {
+        // Call the withdraw method
+        const result = await deployer.call(contract, "withdraw", {
+            token: token.accountId
+        }, {attachedDeposit: "1", gas: "300 Tgas"});
+        console.log("Withdraw completed:", result);
+    } catch (error) {
+        console.error("Withdraw failed:", error);
+    }
+
+    try {
+        const result = await operator.call(contract, "withdraw", {
+            token: token.accountId
+        }, {attachedDeposit: "1", gas: "300 Tgas"});
+        console.log("Withdraw completed:", result);
+    } catch (error) {
+        console.error("Withdraw failed:", error);
+    }
+
+     // Check token balances for both service owner and operator after the withdraw
+    balance = await contract.view("get_token_balance", {token: token.accountId, account_id: deployer.accountId});
+    t.is(balance, 0);
+    balance = await contract.view("get_token_balance", {token: token.accountId, account_id: operator.accountId});
     t.is(balance, 0);
 });
