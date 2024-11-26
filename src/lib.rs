@@ -1536,26 +1536,6 @@ impl ServiceRegistry {
         env::storage_byte_cost().saturating_mul(env::storage_usage().into()).as_yoctonear()
     }
 
-//     pub fn set_metadata(
-//         &mut self,
-//         name: Option<String>,
-//         symbol: Option<String>,
-//         reference: Option<String>,
-//         reference_hash: Option<Base64VecU8>,
-//         decimals: Option<u8>,
-//         icon: Option<String>,
-//     ) {
-//         // Only owner can change the metadata
-//         require!(env::predecessor_account_id() == self.owner, "Owner Only");
-//
-//         name.map(|name| self.name = name);
-//         symbol.map(|symbol| self.symbol = symbol);
-//         reference.map(|reference| self.reference = reference);
-//         reference_hash.map(|reference_hash| self.reference_hash = reference_hash);
-//         decimals.map(|decimals| self.decimals = decimals);
-//         icon.map(|icon| self.icon = Some(icon));
-//     }
-
     pub fn is_paused(&self) -> bool {
         self.paused
     }
