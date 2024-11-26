@@ -365,10 +365,16 @@ impl ServiceRegistry {
 
         // Get the service, record its multisig and update state
         let service = self.services.get_mut(&service_id).unwrap();
-        service.multisig = Some(name_multisig);
+        service.multisig = Some(name_multisig.clone());
         service.state = ServiceState::Deployed;
 
-        // TODO: event
+        env::log_str(&format!(
+            "ServiceRegistry/{}#{}: DeployService: {{\"service_id\": \"{}\"}}, CreateMultisig: {{\"name_multisig\": \"{}\"}}",
+            file!(),
+            line!(),
+            service_id,
+            name_multisig
+        ));
 
         true
     }
@@ -397,17 +403,73 @@ impl ServiceRegistry {
         if agent_instances.len() == multisig_members.len() {
             let matching = agent_instances.iter().zip(multisig_members.iter()).all(|(ai, mm)| ai == mm);
             if matching {
-                service.multisig = Some(name_multisig);
+                service.multisig = Some(name_multisig.clone());
                 // Update service state
                 service.state = ServiceState::Deployed;
 
-                // TODO: event
+                env::log_str(&format!(
+                    "ServiceRegistry/{}#{}: DeployService: {{\"service_id\": \"{}\"}}, UpdateMultisig: {{\"name_multisig\": \"{}\"}}",
+                    file!(),
+                    line!(),
+                    service_id,
+                    name_multisig
+                ));
 
                 return true;
             }
         }
 
         false
+    }
+
+    #[private]
+    pub fn ft_on_transfer_drain_callback(
+        &mut self,
+        token: AccountId,
+        amount: u128,
+        #[callback_result] call_result: Result<(), PromiseError>
+    ) -> bool {
+        // Check if the promise has failed
+        if call_result.is_err() {
+            if let Some(b) = self
+                .slashed_funds
+                .get_mut(&token)
+            {
+                // Add the amount back as it was not transferred
+                *b = b.saturating_add(amount);
+            }
+
+            env::log_str("FT transfer failed");
+            return false;
+        }
+
+        true
+    }
+
+    #[private]
+    pub fn ft_on_transfer_withdraw_callback(
+        &mut self,
+        token: AccountId,
+        sender_id: AccountId,
+        amount: u128,
+        #[callback_result] call_result: Result<(), PromiseError>
+    ) -> bool {
+        // Check if the promise has failed
+        if call_result.is_err() {
+            if let Some(b) = self
+                .all_token_balances
+                .get_mut(&token)
+                .and_then(|balances| balances.get_mut(&sender_id))
+            {
+                // Add the amount back as it was not transferred
+                *b = b.saturating_add(amount);
+            }
+
+            env::log_str("FT transfer on withdraw failed");
+            return false;
+        }
+
+        true
     }
 
     pub fn change_owner(&mut self, new_owner: AccountId) {
@@ -419,7 +481,12 @@ impl ServiceRegistry {
 
         self.owner = new_owner;
 
-        // TODO: event
+        env::log_str(&format!(
+            "ServiceRegistry/{}#{}: OwnerUpdated: {{\"owner\": \"{}\"}}",
+            file!(),
+            line!(),
+            env::predecessor_account_id()
+        ));
     }
 
     #[payable]
@@ -461,7 +528,6 @@ impl ServiceRegistry {
         self.services.insert(
             service_id,
             Service {
-                // TODO: change with just token when other tokens are enabled
                 token: None,
                 security_deposit: 0,
                 multisig: None,
@@ -499,7 +565,13 @@ impl ServiceRegistry {
         let storage = env::storage_usage() - initial_storage_usage;
         self.refund_deposit_to_account(storage, 0, env::predecessor_account_id(), true);
 
-        // TODO: event
+        env::log_str(&format!(
+            "ServiceRegistry/{}#{}: CreateService: {{\"service_id\": \"{}\", \"config_hash\": \"{}\"}}",
+            file!(),
+            line!(),
+            service_id,
+            hex::encode(config_hash)
+        ));
 
         // TODO: If this return if needed, propagate to other functions
         true
@@ -555,7 +627,13 @@ impl ServiceRegistry {
         let storage = env::storage_usage() - initial_storage_usage;
         self.refund_deposit_to_account(storage, 0, env::predecessor_account_id(), true);
 
-        // TODO: event
+        env::log_str(&format!(
+            "ServiceRegistry/{}#{}: UpdateService: {{\"service_id\": \"{}\", \"config_hash\": \"{}\"}}",
+            file!(),
+            line!(),
+            service_id,
+            hex::encode(config_hash)
+        ));
     }
 
     #[payable]
@@ -610,7 +688,12 @@ impl ServiceRegistry {
             }
         }
 
-        // TODO: event
+        env::log_str(&format!(
+            "ServiceRegistry/{}#{}: ActivateRegistration: {{\"service_id\": \"{}\"",
+            file!(),
+            line!(),
+            service_id
+        ));
     }
 
     #[payable]
@@ -680,6 +763,16 @@ impl ServiceRegistry {
 
             // Increase the total bond
             total_bond = total_bond.saturating_add(agent_params.bond.into());
+
+            env::log_str(&format!(
+                "ServiceRegistry/{}#{}: RegisterInstance: {{\"operator\": \"{}\", \"service_id\": \"{}\", \"agent_instance\": \"{}\", \"agent_id\": \"{}\"}}",
+                file!(),
+                line!(),
+                operator,
+                service_id,
+                agent_instances[i],
+                agent_ids[i]
+            ));
         }
 
         // If the service agent instance capacity is reached, the service registration is finished
@@ -727,7 +820,13 @@ impl ServiceRegistry {
         // Consume storage and bond cost and refund the rest
         self.refund_deposit_to_account(storage, total_bond, env::predecessor_account_id(), true);
 
-        // TODO: event
+        env::log_str(&format!(
+            "ServiceRegistry/{}#{}: Deposit: {{\"operator\": \"{}\", \"total_bond\": \"{}\"}}",
+            file!(),
+            line!(),
+            operator,
+            total_bond
+        ));
     }
 
     // TODO: needs to be payable?
@@ -851,7 +950,14 @@ impl ServiceRegistry {
             // Update the operator balance value
             operator_data.balance = balance;
 
-            // TODO event
+            env::log_str(&format!(
+                "ServiceRegistry/{}#{}: OperatorSlashed: {{\"amount\": \"{}\", \"operator\": \"{}\", \"service_id\": \"{}\"}}",
+                file!(),
+                line!(),
+                amount,
+                operator,
+                service_id
+            ));
         }
     }
 
@@ -922,7 +1028,12 @@ impl ServiceRegistry {
         // Send the storage deposit back to the service owner
         self.refund_deposit_to_account(storage, refund, env::predecessor_account_id(), false);
 
-        // TODO: event
+        env::log_str(&format!(
+            "ServiceRegistry/{}#{}: TerminateService: {{\"service_id\": \"{}\"}}",
+            file!(),
+            line!(),
+            service_id
+        ));
     }
 
     #[payable]
@@ -983,6 +1094,14 @@ impl ServiceRegistry {
         // Update registry native balance
         self.native_balance = self.native_balance.saturating_sub(refund.into());
 
+        env::log_str(&format!(
+            "ServiceRegistry/{}#{}: Refund: {{\"operator\": \"{}\", \"refund\": \"{}\"}}",
+            file!(),
+            line!(),
+            operator,
+            refund
+        ));
+
         if service.token.is_some() {
             // Get token balance for the service owner and increase it by a security deposit value
             if let Some(b) = self
@@ -1004,7 +1123,13 @@ impl ServiceRegistry {
         // Refund storage, bond cost and the rest
         self.refund_deposit_to_account(storage, refund, env::predecessor_account_id(), false);
 
-        // TODO: event
+        env::log_str(&format!(
+            "ServiceRegistry/{}#{}: OperatorUnbond: {{\"operator\": \"{}\", \"service_id\": \"{}\"}}",
+            file!(),
+            line!(),
+            operator,
+            service_id
+        ));
     }
 
     #[payable]
@@ -1017,6 +1142,15 @@ impl ServiceRegistry {
         let amount = self.slashed_funds.get_mut(&token).unwrap_or_else(|| env::panic_str("Token not registered"));
         let transfer_amount = *amount;
         *amount = 0;
+
+        env::log_str(&format!(
+            "ServiceRegistry/{}#{}: Drain: {{\"sender_id\": \"{}\", \"token\": \"{}\", \"transfer_amount\": \"{}\"}}",
+            file!(),
+            line!(),
+            env::predecessor_account_id(),
+            token,
+            transfer_amount
+        ));
 
         // Check for native token
         let naive_token: AccountId = (String::from(NATIVE_TOKEN)).parse().unwrap();
@@ -1037,32 +1171,6 @@ impl ServiceRegistry {
                 .ft_on_transfer_drain_callback(token, transfer_amount)
             );
         }
-
-        // TODO: event
-    }
-
-    #[private]
-    pub fn ft_on_transfer_drain_callback(
-        &mut self,
-        token: AccountId,
-        amount: u128,
-        #[callback_result] call_result: Result<(), PromiseError>
-    ) -> bool {
-        // Check if the promise has failed
-        if call_result.is_err() {
-            if let Some(b) = self
-                .slashed_funds
-                .get_mut(&token)
-            {
-                // Add the amount back as it was not transferred
-                *b = b.saturating_add(amount);
-            }
-
-            env::log_str("FT transfer failed");
-            return false;
-        }
-
-        true
     }
 
     #[payable]
@@ -1097,32 +1205,6 @@ impl ServiceRegistry {
         } else {
             env::panic_str("Sender not registered");
         }
-    }
-
-    #[private]
-    pub fn ft_on_transfer_withdraw_callback(
-        &mut self,
-        token: AccountId,
-        sender_id: AccountId,
-        amount: u128,
-        #[callback_result] call_result: Result<(), PromiseError>
-    ) -> bool {
-        // Check if the promise has failed
-        if call_result.is_err() {
-            if let Some(b) = self
-                .all_token_balances
-                .get_mut(&token)
-                .and_then(|balances| balances.get_mut(&sender_id))
-            {
-                // Add the amount back as it was not transferred
-                *b = b.saturating_add(amount);
-            }
-
-            env::log_str("FT transfer on withdraw failed");
-            return false;
-        }
-
-        true
     }
 
     // Call by the operator
@@ -1196,14 +1278,19 @@ impl ServiceRegistry {
         require!(env::predecessor_account_id() == owner_id, "Predecessor must be token owner.");
 
         // Get the service
-        // TODO Check if service id exists?
         let service = self.services.get_mut(&service_id).unwrap();
 
         // Set the operator address check requirement
         service.operators_check = set_check;
 
-        // TODO: event
-        //emit SetOperatorsCheck(msg.sender, serviceId, setCheck);
+        env::log_str(&format!(
+            "ServiceRegistry/{}#{}: SetOperatorsCheck: {{\"sender_id\": \"{}\", \"service_id\": \"{}\", \"set_check\": \"{}\"}}",
+            file!(),
+            line!(),
+            env::predecessor_account_id(),
+            service_id,
+            set_check
+        ));
     }
 
     // Call by the service owner
@@ -1224,7 +1311,6 @@ impl ServiceRegistry {
         let initial_storage_usage = env::storage_usage();
 
         // Get the service
-        // TODO Check if service id exists?
         let service = self.services.get_mut(&service_id).unwrap();
 
         // Set the operator address check requirement
@@ -1240,8 +1326,16 @@ impl ServiceRegistry {
         }
         service.restricted_operators.flush();
 
-        // TODO: event
-        //emit OperatorsWhitelistUpdated(msg.sender, serviceId, operators, statuses, setCheck);
+        env::log_str(&format!(
+            "ServiceRegistry/{}#{}: OperatorsWhitelistUpdated: {{\"sender_id\": \"{}\", \"service_id\": \"{}\", \"operators\": \"{:?}\", \"statuses\": \"{:?}\", \"set_check\": \"{}\"}}",
+            file!(),
+            line!(),
+            env::predecessor_account_id(),
+            service_id,
+            operators,
+            statuses,
+            set_check
+        ));
 
         let storage = env::storage_usage() - initial_storage_usage;
         // Pay for the storage and refund excessive amount
@@ -1254,7 +1348,7 @@ impl ServiceRegistry {
         require!(env::predecessor_account_id() == self.owner, "Owner Only");
 
         env::log_str(&format!(
-            "ServiceRegistry/{}#{}: update_contract_hash: {}",
+            "ServiceRegistry/{}#{}: ContractHashUpdated: {{\"upgrade_hash\": \"{}\"}}",
             file!(),
             line!(),
             hex::encode(&hash)
@@ -1276,7 +1370,7 @@ impl ServiceRegistry {
         }
 
         env::log_str(&format!(
-            "ServiceRegistry/{}#{}: : {}",
+            "ServiceRegistry/{}#{}: UpgradeContract: {{\"upgrade_hash\": \"{}\"}}",
             file!(),
             line!(),
             hex::encode(&hash)
@@ -1308,6 +1402,13 @@ impl ServiceRegistry {
         assert_one_yocto();
         require!(env::predecessor_account_id() == self.owner, "Owner Only");
         self.paused = if paused { true } else { false };
+
+        env::log_str(&format!(
+            "ServiceRegistry/{}#{}: SetPaused: {{\"paused\": \"{}\"}}",
+            file!(),
+            line!(),
+            paused
+        ));
     }
 
     // TODO: unwrap or else or default panic message is ok?
