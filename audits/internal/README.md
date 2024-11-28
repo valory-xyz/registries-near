@@ -276,6 +276,13 @@ const NATIVE_TOKEN: &str = "near";
 5. Group all private functions in one place. 
 [x] Fixed
 
+### Post-audit 28.11.24
+```
+pub fn change_owner(&mut self, new_owner: AccountId) {}
+no assert_one_yocto
+
+```
+
 
 
 
