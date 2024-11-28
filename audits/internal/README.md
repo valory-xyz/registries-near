@@ -280,9 +280,14 @@ const NATIVE_TOKEN: &str = "near";
 ```
 pub fn change_owner(&mut self, new_owner: AccountId) {}
 no assert_one_yocto
-
 ```
 
+```
+            multisig_factory::ext(self.multisig_factory.clone())
+                .with_static_gas(CREATE_CALL_GAS)
+                .with_attached_deposit(env::attached_deposit())
+env::attached_deposit() > 0 ?
+```
 
 
 
