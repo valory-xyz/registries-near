@@ -278,16 +278,42 @@ const NATIVE_TOKEN: &str = "near";
 
 ### Post-audit 28.11.24
 ```
+no #[payable]
 pub fn change_owner(&mut self, new_owner: AccountId) {}
-no assert_one_yocto
+no require!(env::attached_deposit() >= ONE_YOCTO, "Insufficient attached deposit"); or assert_one_yocto();
 ```
 
 ```
             multisig_factory::ext(self.multisig_factory.clone())
                 .with_static_gas(CREATE_CALL_GAS)
                 .with_attached_deposit(env::attached_deposit())
-env::attached_deposit() > 0 ?
+no require!(env::attached_deposit() >= ONE_YOCTO, "Insufficient attached deposit"); or assert_one_yocto();
 ```
 
+```
+#[payable]
+pub fn activate_registration(
+        &mut self,
+        service_id: u32,
+        account_id: Option<AccountId>
+    ) {
+	
+	require!(env::attached_deposit() >= ONE_YOCTO, "Insufficient attached deposit"); or assert_one_yocto();
+```
 
+```
+	#[payable]
+    pub fn deploy(
+        &mut self,
+        service_id: u32,
+        name_multisig: AccountId
+    ) -> Promise {
+	require!(env::attached_deposit() >= ONE_YOCTO, "Insufficient attached deposit"); or assert_one_yocto();
+```
+
+```
+  #[payable]
+	pub fn set_operators_statuses(&mut self, service_id: u32, operators: Vec<AccountId>, statuses: Vec<bool>, set_check: bool) {
+	require!(env::attached_deposit() >= ONE_YOCTO, "Insufficient attached deposit"); or assert_one_yocto();
+```
 
