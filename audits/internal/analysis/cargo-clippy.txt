@@ -1,0 +1,369 @@
+   Compiling proc-macro2 v1.0.86
+   Compiling unicode-ident v1.0.5
+   Compiling version_check v0.9.4
+   Compiling syn v1.0.103
+   Compiling serde_derive v1.0.147
+   Compiling equivalent v1.0.1
+   Compiling hashbrown v0.14.5
+   Compiling toml_datetime v0.6.8
+   Compiling winnow v0.6.20
+   Compiling cfg_aliases v0.2.1
+   Compiling serde v1.0.147
+   Compiling once_cell v1.19.0
+   Compiling rustversion v1.0.9
+   Compiling serde_json v1.0.87
+   Compiling ident_case v1.0.1
+   Compiling fnv v1.0.7
+   Compiling ryu v1.0.11
+   Compiling near-sdk-macros v5.5.0
+   Compiling heck v0.5.0
+   Compiling borsh v1.5.1
+   Compiling itoa v1.0.4
+   Compiling strum v0.26.3
+   Compiling Inflector v0.11.4
+    Checking bs58 v0.5.1
+    Checking near-sys v0.2.2
+    Checking base64 v0.22.1
+    Checking hex v0.4.3
+   Compiling proc-macro-error-attr v1.0.4
+   Compiling proc-macro-error v1.0.4
+   Compiling indexmap v2.5.0
+   Compiling quote v1.0.37
+   Compiling syn v2.0.77
+   Compiling toml_edit v0.22.22
+   Compiling proc-macro-crate v3.2.0
+   Compiling darling_core v0.20.10
+   Compiling syn_derive v0.1.8
+   Compiling strum_macros v0.26.4
+   Compiling borsh-derive v1.5.1
+   Compiling darling_macro v0.20.10
+   Compiling darling v0.20.10
+    Checking near-gas v0.3.0
+    Checking near-token v0.3.0
+    Checking near-account-id v1.0.0
+    Checking near-sdk v5.5.0
+    Checking near-contract-standards v5.5.0
+    Checking registries_near v0.1.0 (/home/andrey/valory/registries-near)
+warning: use of deprecated macro `near_contract_standards::impl_non_fungible_token_core`: implement the near_contract_standards::non_fungible_token::NonFungibleTokenCore and near_contract_standards::non_fungible_token::NonFungibleTokenResolver traits manually instead.
+    --> src/lib.rs:1409:1
+     |
+1409 | near_contract_standards::impl_non_fungible_token_core!(ServiceRegistry, tokens);
+     | ^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^
+     |
+     = note: `#[warn(deprecated)]` on by default
+
+warning: use of deprecated macro `near_contract_standards::impl_non_fungible_token_approval`: implement the near_contract_standards::non_fungible_token::NonFungibleTokenApproval trait manually instead.
+    --> src/lib.rs:1410:1
+     |
+1410 | near_contract_standards::impl_non_fungible_token_approval!(ServiceRegistry, tokens);
+     | ^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^
+
+warning: use of deprecated macro `near_contract_standards::impl_non_fungible_token_enumeration`: implement the near_contract_standards::non_fungible_token::NonFungibleTokenEnumeration trait manually instead.
+    --> src/lib.rs:1411:1
+     |
+1411 | near_contract_standards::impl_non_fungible_token_enumeration!(ServiceRegistry, tokens);
+     | ^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^
+
+warning: this `else { if .. }` block can be collapsed
+    --> src/lib.rs:1008:16
+     |
+1008 |           } else {
+     |  ________________^
+1009 | |             if transfer_amount > 0 {
+1010 | |                 *amount = 0;
+1011 | |                 ext_ft_core::ext(token)
+...    |
+1014 | |             }
+1015 | |         }
+     | |_________^
+     |
+     = help: for further information visit https://rust-lang.github.io/rust-clippy/master/index.html#collapsible_else_if
+     = note: `#[warn(clippy::collapsible_else_if)]` on by default
+help: collapse nested if block
+     |
+1008 ~         } else if transfer_amount > 0 {
+1009 +             *amount = 0;
+1010 +             ext_ft_core::ext(token)
+1011 +                 .with_static_gas(CALL_GAS)
+1012 +                 .ft_transfer(env::predecessor_account_id(), U128::from(transfer_amount), None);
+1013 +         }
+     |
+
+warning: use of deprecated type alias `near_sdk::json_types::Base58PublicKey`: PublicKey type is now unified with Base58PublicKey. It is recommended to use PublicKey going forward to avoid using similar sounding types for the same thing.
+ --> src/lib.rs:8:28
+  |
+8 | use near_sdk::json_types::{Base58PublicKey, U128};
+  |                            ^^^^^^^^^^^^^^^
+
+warning: use of deprecated type alias `near_sdk::json_types::Base58PublicKey`: PublicKey type is now unified with Base58PublicKey. It is recommended to use PublicKey going forward to avoid using similar sounding types for the same thing.
+  --> src/lib.rs:18:29
+   |
+18 |     AccessKey { public_key: Base58PublicKey },
+   |                             ^^^^^^^^^^^^^^^
+
+warning: unused variable: `msg`
+    --> src/lib.rs:1426:9
+     |
+1426 |         msg: String,
+     |         ^^^ help: if this is intentional, prefix it with an underscore: `_msg`
+     |
+     = note: `#[warn(unused_variables)]` on by default
+
+warning: trait `MultisigFactory` is never used
+  --> src/lib.rs:24:7
+   |
+24 | trait MultisigFactory {
+   |       ^^^^^^^^^^^^^^^
+   |
+   = note: `#[warn(dead_code)]` on by default
+
+warning: trait `Multisig2` is never used
+  --> src/lib.rs:37:7
+   |
+37 | trait Multisig2 {
+   |       ^^^^^^^^^
+
+warning: this function has too many arguments (9/7)
+   --> src/lib.rs:138:1
+    |
+138 | #[near]
+    | ^^^^^^^
+    |
+    = help: for further information visit https://rust-lang.github.io/rust-clippy/master/index.html#too_many_arguments
+    = note: `#[warn(clippy::too_many_arguments)]` on by default
+    = note: this warning originates in the attribute macro `::near_sdk::near_bindgen` (in Nightly builds, run with -Z macro-backtrace for more info)
+
+warning: this function has too many arguments (8/7)
+   --> src/lib.rs:138:1
+    |
+138 | #[near]
+    | ^^^^^^^
+    |
+    = help: for further information visit https://rust-lang.github.io/rust-clippy/master/index.html#too_many_arguments
+    = note: this warning originates in the attribute macro `::near_sdk::near_bindgen` (in Nightly builds, run with -Z macro-backtrace for more info)
+
+warning: casting integer literal to `u128` is unnecessary
+   --> src/lib.rs:160:22
+    |
+160 |             balance: 0 as u128,
+    |                      ^^^^^^^^^ help: try: `0_u128`
+    |
+    = help: for further information visit https://rust-lang.github.io/rust-clippy/master/index.html#unnecessary_cast
+    = note: `#[warn(clippy::unnecessary_cast)]` on by default
+
+warning: length comparison to zero
+   --> src/lib.rs:211:18
+    |
+211 |         require!(agent_ids.len() > 0);
+    |                  ^^^^^^^^^^^^^^^^^^^ help: using `!is_empty` is clearer and more explicit: `!agent_ids.is_empty()`
+    |
+    = help: for further information visit https://rust-lang.github.io/rust-clippy/master/index.html#len_zero
+    = note: `#[warn(clippy::len_zero)]` on by default
+
+warning: this function has too many arguments (9/7)
+   --> src/lib.rs:229:5
+    |
+229 | /     fn fill_service_params(
+230 | |         &mut self,
+231 | |         service_owner: AccountId,
+232 | |         service_id: u32,
+...   |
+238 | |         threshold: u32
+239 | |     ) {
+    | |_____^
+    |
+    = help: for further information visit https://rust-lang.github.io/rust-clippy/master/index.html#too_many_arguments
+
+warning: this function has too many arguments (9/7)
+   --> src/lib.rs:342:5
+    |
+342 | /     pub fn create(
+343 | |         &mut self,
+344 | |         service_owner: AccountId,
+345 | |         metadata: TokenMetadata,
+...   |
+351 | |         threshold: u32
+352 | |     ) -> bool {
+    | |_____________^
+    |
+    = help: for further information visit https://rust-lang.github.io/rust-clippy/master/index.html#too_many_arguments
+
+warning: this function has too many arguments (8/7)
+   --> src/lib.rs:424:5
+    |
+424 | /     pub fn update(
+425 | |         &mut self,
+426 | |         service_id: u32,
+427 | |         token: Option<AccountId>,
+...   |
+432 | |         threshold: u32
+433 | |     ) {
+    | |_____^
+    |
+    = help: for further information visit https://rust-lang.github.io/rust-clippy/master/index.html#too_many_arguments
+
+warning: useless conversion to the same type: `u128`
+   --> src/lib.rs:505:56
+    |
+505 |             self.balance = self.balance.saturating_add(security_deposit.into());
+    |                                                        ^^^^^^^^^^^^^^^^^^^^^^^ help: consider removing `.into()`: `security_deposit`
+    |
+    = help: for further information visit https://rust-lang.github.io/rust-clippy/master/index.html#useless_conversion
+    = note: `#[warn(clippy::useless_conversion)]` on by default
+
+warning: casting integer literal to `u128` is unnecessary
+   --> src/lib.rs:558:26
+    |
+558 |                 balance: 0 as u128,
+    |                          ^^^^^^^^^ help: try: `0_u128`
+    |
+    = help: for further information visit https://rust-lang.github.io/rust-clippy/master/index.html#unnecessary_cast
+
+warning: casting integer literal to `u128` is unnecessary
+   --> src/lib.rs:564:30
+    |
+564 |         let mut total_bond = 0 as u128;
+    |                              ^^^^^^^^^ help: try: `0_u128`
+    |
+    = help: for further information visit https://rust-lang.github.io/rust-clippy/master/index.html#unnecessary_cast
+
+warning: casting to the same type is unnecessary (`u32` -> `u32`)
+   --> src/lib.rs:574:57
+    |
+574 |             require!(agent_params.num_agent_instances > agent_params.instances.len() as u32);
+    |                                                         ^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^ help: try: `agent_params.instances.len()`
+    |
+    = help: for further information visit https://rust-lang.github.io/rust-clippy/master/index.html#unnecessary_cast
+
+warning: useless conversion to the same type: `u128`
+   --> src/lib.rs:591:52
+    |
+591 |             total_bond = total_bond.saturating_add(agent_params.bond.into());
+    |                                                    ^^^^^^^^^^^^^^^^^^^^^^^^ help: consider removing `.into()`: `agent_params.bond`
+    |
+    = help: for further information visit https://rust-lang.github.io/rust-clippy/master/index.html#useless_conversion
+
+warning: useless conversion to the same type: `u128`
+   --> src/lib.rs:600:70
+    |
+600 |         operator_data.balance = operator_data.balance.saturating_add(total_bond.into());
+    |                                                                      ^^^^^^^^^^^^^^^^^ help: consider removing `.into()`: `total_bond`
+    |
+    = help: for further information visit https://rust-lang.github.io/rust-clippy/master/index.html#useless_conversion
+
+warning: useless conversion to the same type: `u128`
+   --> src/lib.rs:634:56
+    |
+634 |             self.balance = self.balance.saturating_add(total_bond.into());
+    |                                                        ^^^^^^^^^^^^^^^^^ help: consider removing `.into()`: `total_bond`
+    |
+    = help: for further information visit https://rust-lang.github.io/rust-clippy/master/index.html#useless_conversion
+
+warning: useless conversion to the same type: `u128`
+   --> src/lib.rs:840:66
+    |
+840 |                 *slashed_funds = (*slashed_funds).saturating_add(balance.into());
+    |                                                                  ^^^^^^^^^^^^^^ help: consider removing `.into()`: `balance`
+    |
+    = help: for further information visit https://rust-lang.github.io/rust-clippy/master/index.html#useless_conversion
+
+warning: useless conversion to the same type: `u128`
+   --> src/lib.rs:843:66
+    |
+843 |                 *slashed_funds = (*slashed_funds).saturating_add(amount.into());
+    |                                                                  ^^^^^^^^^^^^^ help: consider removing `.into()`: `amount`
+    |
+    = help: for further information visit https://rust-lang.github.io/rust-clippy/master/index.html#useless_conversion
+
+warning: useless conversion to the same type: `u128`
+   --> src/lib.rs:844:50
+    |
+844 |                 balance = balance.saturating_sub(amount.into());
+    |                                                  ^^^^^^^^^^^^^ help: consider removing `.into()`: `amount`
+    |
+    = help: for further information visit https://rust-lang.github.io/rust-clippy/master/index.html#useless_conversion
+
+warning: useless conversion to the same type: `u128`
+   --> src/lib.rs:892:52
+    |
+892 |         self.balance = self.balance.saturating_sub(refund.into());
+    |                                                    ^^^^^^^^^^^^^ help: consider removing `.into()`: `refund`
+    |
+    = help: for further information visit https://rust-lang.github.io/rust-clippy/master/index.html#useless_conversion
+
+warning: casting integer literal to `u128` is unnecessary
+   --> src/lib.rs:943:26
+    |
+943 |         let mut refund = 0 as u128;
+    |                          ^^^^^^^^^ help: try: `0_u128`
+    |
+    = help: for further information visit https://rust-lang.github.io/rust-clippy/master/index.html#unnecessary_cast
+
+warning: this expression creates a reference which is immediately dereferenced by the compiler
+   --> src/lib.rs:948:49
+    |
+948 |             let bond = service.agent_params.get(&agent_id).unwrap().bond;
+    |                                                 ^^^^^^^^^ help: change this to: `agent_id`
+    |
+    = help: for further information visit https://rust-lang.github.io/rust-clippy/master/index.html#needless_borrow
+    = note: `#[warn(clippy::needless_borrow)]` on by default
+
+warning: useless conversion to the same type: `u128`
+   --> src/lib.rs:950:44
+    |
+950 |             refund = refund.saturating_add(bond.into());
+    |                                            ^^^^^^^^^^^ help: consider removing `.into()`: `bond`
+    |
+    = help: for further information visit https://rust-lang.github.io/rust-clippy/master/index.html#useless_conversion
+
+warning: useless conversion to the same type: `u128`
+   --> src/lib.rs:970:52
+    |
+970 |         self.balance = self.balance.saturating_sub(refund.into());
+    |                                                    ^^^^^^^^^^^^^ help: consider removing `.into()`: `refund`
+    |
+    = help: for further information visit https://rust-lang.github.io/rust-clippy/master/index.html#useless_conversion
+
+warning: length comparison to zero
+    --> src/lib.rs:1137:18
+     |
+1137 |         require!(operators.len() > 0);
+     |                  ^^^^^^^^^^^^^^^^^^^ help: using `!is_empty` is clearer and more explicit: `!operators.is_empty()`
+     |
+     = help: for further information visit https://rust-lang.github.io/rust-clippy/master/index.html#len_zero
+
+warning: casting integer literal to `u128` is unnecessary
+    --> src/lib.rs:1159:30
+     |
+1159 |                     balance: 0 as u128,
+     |                              ^^^^^^^^^ help: try: `0_u128`
+     |
+     = help: for further information visit https://rust-lang.github.io/rust-clippy/master/index.html#unnecessary_cast
+
+warning: this if-then-else expression returns a bool literal
+    --> src/lib.rs:1214:23
+     |
+1214 |         self.paused = if paused { true } else { false };
+     |                       ^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^ help: you can reduce it to: `paused`
+     |
+     = help: for further information visit https://rust-lang.github.io/rust-clippy/master/index.html#needless_bool
+     = note: `#[warn(clippy::needless_bool)]` on by default
+
+warning: this expression creates a reference which is immediately dereferenced by the compiler
+    --> src/lib.rs:1246:76
+     |
+1246 |             agent_params_num_agent_instances.push(service.agent_params.get(&ai).unwrap().num_agent_instances);
+     |                                                                            ^^^ help: change this to: `ai`
+     |
+     = help: for further information visit https://rust-lang.github.io/rust-clippy/master/index.html#needless_borrow
+
+warning: this expression creates a reference which is immediately dereferenced by the compiler
+    --> src/lib.rs:1257:62
+     |
+1257 |             agent_params_bonds.push(service.agent_params.get(&ai).unwrap().bond);
+     |                                                              ^^^ help: change this to: `ai`
+     |
+     = help: for further information visit https://rust-lang.github.io/rust-clippy/master/index.html#needless_borrow
+
+warning: `registries_near` (lib) generated 37 warnings (1 duplicate) (run `cargo clippy --fix --lib -p registries_near` to apply 23 suggestions)
+    Finished `dev` profile [unoptimized + debuginfo] target(s) in 6.43s
