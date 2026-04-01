@@ -783,6 +783,7 @@ impl ServiceRegistry {
         // Check agent instances vs multisig members
         let multisig_members = call_result.unwrap();
         let matching = agent_instances.iter().zip(multisig_members.iter()).filter(|&(ai, mm)| ai == mm).count();
+
         //let matching = agent_instances.iter().zip(multisig_members.iter()).filter(|&(ai, mm)| match ai {MultisigMember::Account(value) => value == mm, _ => {false}}).count();
         if matching == agent_instances.len() && matching == multisig_members.len() {
             service.multisig = Some(name_multisig);
