@@ -19,29 +19,32 @@ https://docs.rs/cargo-audit/latest/cargo_audit/
 cargo install cargo-audit
 cargo-audit audit > audits/internal/analysis/cargo-audit.txt
 ```
+
 ##### cargo clippy 
 https://github.com/rust-lang/rust-clippy
 ```
 cargo clippy 2> audits/internal/analysis/cargo-clippy.txt
 ```
+
 All automatic warnings are listed in the following file, concerns of which we address in more detail below: <br>
 [cargo-tree.txt](https://github.com/valory-xyz/registries-near/blob/main/lockbox/audits/internal/analysis/cargo-tree.txt) <br>
 [cargo-audit.txt](https://github.com/valory-xyz/registries-near/blob/main/lockbox/audits/internal/analysis/cargo-audit.txt) <br>
 [cargo-clippy.txt](https://github.com/valory-xyz/registries-near/blob/main/lockbox/audits/internal/analysis/cargo-clippy.txt) <br>
 
-
-
 ### Issue by BlockSec list
 #### find Promises that are not handled - Issue
 yes. see `Critical issue. Incorrect logic ft_transfer`
+
 #### missing macro #[private] for callback functions
 no
 #### find functions that are vulnerable to reentrancy attack - Double checks
 Look at: https://github.com/blocksecteam/rustle/blob/main/docs/detectors/reentrancy.md
+
 #### lack of overflow check for arithmetic operation - Issue
 ```            
 *b += amount.0;
 ```
+
 #### missing check of sender != receiver
 no
 #### incorrect type used in parameters or return values
@@ -60,6 +63,7 @@ no
 ```
 pub fn create_multisig_callback
 ```
+
 #### no assert_one_yocto in privileged function - Issue
 ```
 Details: https://github.com/blocksecteam/rustle/blob/main/docs/detectors/yocto-attach.md
@@ -79,6 +83,7 @@ This can be implemented in the contract by adding assert_one_yocto, which is rec
 11. pub fn set_operators_check
 12. pub fn change_upgrade_hash
 ```
+
 #### duplicate id uses in collections
 no, StorageKey
 #### no panic on unregistered transfer receivers
@@ -163,6 +168,7 @@ pub fn change_owner(&mut self, new_owner: AccountId)
         // TODO: event
 ... etc
 ```
+
 #### not panic, refund attached deposit + tests
 ```
  pub fn create_multisig_callback(
@@ -177,6 +183,7 @@ pub fn change_owner(&mut self, new_owner: AccountId)
 
             // TODO refund
 ```
+
 #### not refund by logic
 ```
     pub fn update_multisig_callback(
@@ -197,6 +204,7 @@ pub fn change_owner(&mut self, new_owner: AccountId)
 ```
 require!(self.services.contains_key(&service_id), "Service not found");
 ```
+
 #### return vs panic in ft_on_transfer?
 ```
 fn ft_on_transfer(
@@ -227,6 +235,7 @@ fn ft_on_transfer(
         }
     }
 ```
+
 ### Low issue (code)
 #### not private pub fn refund_deposit_to_account
 ```
@@ -234,19 +243,26 @@ fn ft_on_transfer(
     pub fn refund_deposit_to_account
 ```
 better "private pub fn" vs "fn". To discussing
+
 #### better code update_multisig_callback?
 ```
 let matching = agent_instances.iter().zip(multisig_members.iter()).all(|(ai, mm)| ai == mm);
 ```
+
 #### better code drain?
 ```
 const NATIVE_TOKEN: &str = "near";
 ```
+
 ### Low issue (doc)
 1. Fixing README.md - `Build the code:` - incorrect. 
+
 2. Fixing README.md - remove sandbox part as outdated. 
+
 3. Fixing setup-env.sh to actual versions if needed
+
 4. Ref FungibleToken in README. 
+
 5. Group all private functions in one place. 
 
 
